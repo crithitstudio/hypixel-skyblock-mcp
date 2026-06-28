@@ -23,6 +23,7 @@ import {
   asString,
   compactObject,
   dashedUuid,
+  freshnessFromMeta,
   getPath,
   looksLikeUuid,
   normalizeUuid,
@@ -33,6 +34,7 @@ import {
   stripMinecraftFormatting,
   takeEntries
 } from "./utils.js";
+import { AUCTION_CAVEATS, BAZAAR_CAVEATS } from "./caveats.js";
 
 type ProfileSelection = {
   profileId?: string;
@@ -473,6 +475,8 @@ export async function getBazaar(
 
   return {
     meta: result.meta,
+    freshness: freshnessFromMeta(result.meta, 60),
+    caveats: BAZAAR_CAVEATS,
     sortBy,
     products: sorted
   };
@@ -1299,6 +1303,8 @@ function formatAuctionResult(
 
   return {
     meta: result.meta,
+    freshness: freshnessFromMeta(result.meta, 60),
+    caveats: AUCTION_CAVEATS,
     page: result.data.page,
     totalPages: result.data.totalPages,
     totalAuctions: result.data.totalAuctions,

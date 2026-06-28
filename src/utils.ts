@@ -1,4 +1,4 @@
-import type { JsonObject } from "./types.js";
+import type { JsonObject, RequestMeta } from "./types.js";
 
 export function isRecord(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -147,6 +147,50 @@ export function parseEnvInteger(name: string, fallback: number): number {
 
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+export type Freshness = {
+  fetchedAt: string;
+  cached: boolean;
+  dataAgeSeconds: number | null;
+  staleWarning?: string;
+  note?: string;
+};
+
+/**
+ * Turns a raw fetch timestamp into agent-readable freshness: how many seconds old
+ * the data is and an explicit warning string once it exceeds `staleAfterSeconds`.
+ * Surfaced on volatile tool output so the model weights live data over its own
+ * (stale) training memory instead of having to reason about an ISO timestamp.
+ *
+ * `note` lets callers clarify what the timestamp actually covers (e.g. for item
+ * lookups the metadata is cached longer than the live price it carries).
+ */
+export function freshnessFromMeta(meta: RequestMeta, staleAfterSeconds: number, note?: string): Freshness {
+  const fetchedMs = Date.parse(meta.fetchedAt);
+  const dataAgeSeconds = Number.isFinite(fetchedMs) ? Math.max(0, Math.round((Date.now() - fetchedMs) / 1000)) : null;
+
+  const freshness: Freshness = {
+    fetchedAt: meta.fetchedAt,
+    cached: meta.cached,
+    dataAgeSeconds
+  };
+
+  if (dataAgeSeconds !== null && dataAgeSeconds > staleAfterSeconds) {
+    freshness.staleWarning = `Data is ~${dataAgeSeconds}s old (> ${staleAfterSeconds}s); re-fetch before quoting exact prices.`;
+  }
+  if (note) {
+    freshness.note = note;
+  }
+  return freshness;
+}
+
+/** Same as {@link freshnessFromMeta} but tolerates a possibly-undefined timestamp string. */
+export function freshnessFromTimestamp(fetchedAt: string | undefined, cached: boolean, staleAfterSeconds: number): Freshness | undefined {
+  if (!fetchedAt) {
+    return undefined;
+  }
+  return freshnessFromMeta({ fetchedAt, cached, source: "" }, staleAfterSeconds);
 }
 
 export function createTextResult(value: unknown) {

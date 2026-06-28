@@ -16,7 +16,8 @@ const COVERAGE_INCLUDE = [
   "src/skill-trees.ts",
   "src/progression.ts",
   "src/nbt.ts",
-  "src/utils.ts"
+  "src/utils.ts",
+  "src/caveats.ts"
 ];
 
 export default defineConfig({

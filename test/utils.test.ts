@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   asArray,
   asBoolean,
@@ -8,6 +8,8 @@ import {
   compactObject,
   createTextResult,
   dashedUuid,
+  freshnessFromMeta,
+  freshnessFromTimestamp,
   getPath,
   isRecord,
   looksLikeUuid,
@@ -120,5 +122,44 @@ describe("env + output helpers", () => {
   it("redactApiKey masks key query params only", () => {
     expect(redactApiKey("https://api/x?key=secret&page=1")).toBe("https://api/x?key=<redacted>&page=1");
     expect(redactApiKey("https://api/x?page=1")).toBe("https://api/x?page=1");
+  });
+});
+
+describe("freshnessFromMeta", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("computes data age and omits a warning when fresh", () => {
+    const now = Date.parse("2026-06-28T00:00:30.000Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const fresh = freshnessFromMeta({ fetchedAt: "2026-06-28T00:00:00.000Z", cached: true, source: "x" }, 60);
+    expect(fresh.dataAgeSeconds).toBe(30);
+    expect(fresh.cached).toBe(true);
+    expect(fresh.staleWarning).toBeUndefined();
+  });
+
+  it("sets a staleWarning once age exceeds the threshold", () => {
+    const now = Date.parse("2026-06-28T00:02:00.000Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const stale = freshnessFromMeta({ fetchedAt: "2026-06-28T00:00:00.000Z", cached: false, source: "x" }, 60);
+    expect(stale.dataAgeSeconds).toBe(120);
+    expect(stale.staleWarning).toContain("120s");
+  });
+
+  it("returns null age (no crash) when the timestamp is missing or unparseable", () => {
+    const result = freshnessFromMeta({ fetchedAt: "", cached: false, source: "x" }, 60);
+    expect(result.dataAgeSeconds).toBeNull();
+    expect(result.staleWarning).toBeUndefined();
+  });
+
+  it("attaches a clarifying note when provided", () => {
+    const result = freshnessFromMeta({ fetchedAt: "2026-06-28T00:00:00.000Z", cached: false, source: "x" }, 60, "metadata only");
+    expect(result.note).toBe("metadata only");
+  });
+
+  it("freshnessFromTimestamp returns undefined without a timestamp", () => {
+    expect(freshnessFromTimestamp(undefined, false, 60)).toBeUndefined();
+    expect(freshnessFromTimestamp("2026-06-28T00:00:00.000Z", true, 60)?.cached).toBe(true);
   });
 });

@@ -8,7 +8,8 @@ import type { PriceBasis, PriceBook } from "./pricing.js";
 import { loadProfileMember, summarizeProfile } from "./skyblock.js";
 import { extractSacksCounts } from "./storage.js";
 import type { DecodedInventory, JsonObject } from "./types.js";
-import { asArray, asNumber, asRecord, compactObject, getPath } from "./utils.js";
+import { asArray, asNumber, asRecord, compactObject, freshnessFromMeta, freshnessFromTimestamp, getPath } from "./utils.js";
+import { NETWORTH_CAVEATS } from "./caveats.js";
 
 // Holdings worth pricing. "loadout" is excluded to avoid double counting saved
 // wardrobe sets, and "sack" is handled separately via sacks_counts.
@@ -169,11 +170,14 @@ export async function getSkyblockNetworth(client: HypixelClient, options: Networ
       selectedMemberUuid: memberUuid,
       hasApiKey: client.hasApiKey()
     },
+    freshness: freshnessFromMeta(profileResult.meta, 60, "Profile data freshness. See networth.priceFreshness for how current the backing prices are."),
+    caveats: NETWORTH_CAVEATS,
     profile: summarizeProfile(profile),
     networth: compactObject({
       total: round(total),
       priceBasis: priceBook.basis,
       priceSources: priceBook.sources,
+      priceFreshness: freshnessFromTimestamp(priceBook.pricedAt, priceBook.pricedFromCache ?? false, 60),
       liquid: compactObject({ purse: round(purse), bank: round(bank), total: round(liquid) }),
       items: compactObject({
         total: round(itemsValue),

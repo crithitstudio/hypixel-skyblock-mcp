@@ -58,6 +58,10 @@ describe("item lookup", () => {
     expect(value.buyPrice).toBe(1300);
     expect(value.sellPrice).toBe(1200);
     expect(value.spread).toBe(100);
+    expect(Array.isArray(result.caveats)).toBe(true);
+    expect((result.caveats as unknown[]).length).toBeGreaterThan(0);
+    expect(result.freshness).toBeDefined();
+    expect(result.priceFreshness).toBeDefined();
   });
 
   it("flags auction-only items instead of inventing a price", async () => {
