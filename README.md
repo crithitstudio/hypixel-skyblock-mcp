@@ -53,7 +53,10 @@ manually rather than by unit tests.
 
 Publishing is automated (`.github/workflows/publish.yml`): creating a GitHub
 Release whose tag matches the `package.json` version publishes the package to
-npm (with provenance). This requires an `NPM_TOKEN` repository secret.
+npm with provenance. Authentication uses npm
+[Trusted Publishing (OIDC)](https://docs.npmjs.com/trusted-publishers/), so no
+`NPM_TOKEN` secret is required — configure a Trusted Publisher for this repo and
+workflow in the package's npm settings instead.
 
 ## Tools
 
