@@ -4,7 +4,7 @@ An AI-facing Model Context Protocol server for Hypixel SkyBlock data. It fetches
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 22 or newer
 - A Hypixel API key for private/profile endpoints
 
 Get a key from the [Hypixel Developer Dashboard](https://developer.hypixel.net/) and provide it as `HYPIXEL_API_KEY`.
@@ -144,7 +144,7 @@ workflow in the package's npm settings instead.
 
 On top of the **base SkyBlock-ID price**, `skyblock_networth` adds **modifier value** for enchantments, hot potato/fuming books, recombobulators, and essence/master stars (set `includeModifiers: false` to disable). Each modifier is valued at the [SkyHelper-Networth](https://github.com/Altpapier/SkyHelper-Networth) "application worth" fraction of the live Bazaar price of the component (e.g. enchantments at 85%, essence at 75%), and essence/master-star costs come from the official items resource's `upgrade_costs`. The response reports `items.modifiers` (total, `byType` breakdown, and `unpricedComponents`).
 
-The modifier categories above are the ones currently modelled. SkyHelper values several more that this server does **not** yet add, so `total` is a conservative estimate for heavily upgraded items: reforges, gemstones and gemstone slots, runes, dyes, pet items/pet levels, art of war/peace, power scrolls, and other cosmetic or upgrade consumables are excluded.
+The modifier categories above are the ones currently modelled. SkyHelper values several more that this server does **not** yet add, so `total` is a conservative estimate for heavily upgraded items: reforges, gemstones and gemstone slots, runes, dyes, pet items/pet levels, art of war/peace, power scrolls, and other cosmetic or upgrade consumables are excluded. Gemstone and reforge valuation is on the roadmap (see [CHANGELOG.md](CHANGELOG.md)).
 
 Modifier value is only added to items that already have a base price, so auction-only gear is undervalued unless a lowest-BIN source is configured. Read the `coverage` report (`pricedPercent`) to see how much of the profile could be priced, and treat `total` as an estimate.
 
