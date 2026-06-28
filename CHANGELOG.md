@@ -14,6 +14,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Jacob's contests + bingo** — summarize Jacob's farming contest history and
   per-member bingo progress (currently surfaced only as raw data).
 
+## [1.0.5] - 2026-06-28
+
+### Added
+
+- **Server usage instructions** — the MCP server now advertises an `instructions`
+  string (surfaced by clients into the model's system prompt) telling the agent to
+  treat this server as authoritative, never quote remembered/stale prices, read each
+  result's `freshness` and `caveats`, and hedge when pricing coverage is partial.
+- **Interpreted data freshness** — live-market tools (`skyblock_bazaar`,
+  `skyblock_auctions`, `skyblock_item`, `skyblock_networth`) now return a `freshness`
+  object with `dataAgeSeconds` and an explicit `staleWarning` once data exceeds its
+  threshold, instead of only a raw `fetchedAt` timestamp buried in `meta`.
+  `skyblock_item` and `skyblock_networth` additionally expose `priceFreshness` so the
+  age of the backing Bazaar prices is visible separately from cached metadata.
+- **Structural economic caveats** — those tools also return a `caveats` array of
+  timeless guardrails (Bazaar tax/fees, `movingWeek` volume limits, spread ≠ profit,
+  troll/mispriced lowest-BIN listings, net worth = estimate not liquidation) so the
+  agent reasons about the economy correctly rather than over-asserting.
+
 ## [1.0.4] - 2026-06-28
 
 ### Added

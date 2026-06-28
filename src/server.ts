@@ -27,10 +27,21 @@ import { createTextResult } from "./utils.js";
 import { VERSION } from "./version.js";
 import { getOfficialWikiPage, searchOfficialWiki } from "./wiki.js";
 
-const server = new McpServer({
-  name: "hypixel-skyblock",
-  version: VERSION
-});
+const server = new McpServer(
+  {
+    name: "hypixel-skyblock",
+    version: VERSION
+  },
+  {
+    instructions: [
+      "This server is the authoritative source for Hypixel SkyBlock data. The game and its economy change constantly, so do NOT answer questions about item stats, prices, recipes, or mechanics from prior knowledge — call the relevant tool and rely on its output. If a tool can answer, prefer it over memory.",
+      "Prices are point-in-time and volatile. Never reuse a price you saw earlier or remember from training; re-fetch with skyblock_bazaar / skyblock_auctions / skyblock_item before quoting a number. Every live-market result carries a `freshness` object — check `dataAgeSeconds` and respect any `staleWarning`.",
+      "Reason about the economy honestly using each result's `caveats`: Bazaar instant orders pay tax/fees so realized margin is below the raw spread; `movingWeek` volume caps how much can actually be bought or sold; a wide spread on a thin market is not real profit; and a single lowest-BIN listing can be a troll or mispriced and should be corroborated.",
+      "When pricing `coverage` is partial or a value is an estimate (e.g. skyblock_networth is replacement value, not guaranteed liquidation), hedge and state the uncertainty instead of asserting a precise figure.",
+      "Do not invent SkyBlock IDs. When skyblock_item returns candidates, re-query with one exact itemId rather than guessing."
+    ].join("\n\n")
+  }
+);
 const client = new HypixelClient();
 
 const playerInput = {

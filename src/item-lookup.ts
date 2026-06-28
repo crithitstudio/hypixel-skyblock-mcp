@@ -3,7 +3,8 @@ import { buildPriceBook, priceFor } from "./pricing.js";
 import type { PriceBasis } from "./pricing.js";
 import { getBazaar } from "./skyblock.js";
 import type { JsonObject } from "./types.js";
-import { asArray, asNumber, asRecord, asString, compactObject, stripMinecraftFormatting } from "./utils.js";
+import { asArray, asNumber, asRecord, asString, compactObject, freshnessFromMeta, stripMinecraftFormatting } from "./utils.js";
+import { ITEM_VALUE_CAVEATS } from "./caveats.js";
 import { getOfficialWikiItemContext } from "./wiki.js";
 
 export type ItemLookupOptions = {
@@ -131,7 +132,9 @@ export async function lookupItem(client: HypixelClient, options: ItemLookupOptio
   const bazaarProduct = asArray(bazaar.products)?.[0] as JsonObject | undefined;
 
   let value: JsonObject;
+  let priceFreshness: unknown;
   if (bazaarProduct) {
+    priceFreshness = bazaar.freshness;
     value = compactObject({
       source: "bazaar",
       buyPrice: bazaarProduct.buyPrice,
@@ -177,6 +180,13 @@ export async function lookupItem(client: HypixelClient, options: ItemLookupOptio
 
   return compactObject({
     meta: itemsResult.meta,
+    freshness: freshnessFromMeta(
+      itemsResult.meta,
+      10 * 60,
+      "This timestamp covers cached item metadata (tier/stats), not the price. See priceFreshness for how current the value is."
+    ),
+    priceFreshness,
+    caveats: ITEM_VALUE_CAVEATS,
     found: true,
     item,
     value,

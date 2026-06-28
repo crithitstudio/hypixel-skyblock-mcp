@@ -8,6 +8,10 @@ export type PriceBook = {
   prices: Map<string, number>;
   basis: PriceBasis;
   sources: string[];
+  /** When the backing Bazaar prices were fetched (ISO). Absent if the Bazaar fetch failed. */
+  pricedAt?: string;
+  /** Whether the backing Bazaar response was served from cache. */
+  pricedFromCache?: boolean;
 };
 
 export type PriceBookOptions = {
@@ -25,6 +29,8 @@ export async function buildPriceBook(client: HypixelClient, options?: PriceBookO
   const basis: PriceBasis = options?.basis ?? "buy";
   const prices = new Map<string, number>();
   const sources: string[] = [];
+  let pricedAt: string | undefined;
+  let pricedFromCache: boolean | undefined;
 
   try {
     const result = await client.hypixel<JsonObject>("/v2/skyblock/bazaar", undefined, { ttlMs: 30_000 });
@@ -37,6 +43,8 @@ export async function buildPriceBook(client: HypixelClient, options?: PriceBookO
       }
     }
     sources.push("bazaar");
+    pricedAt = result.meta.fetchedAt;
+    pricedFromCache = result.meta.cached;
   } catch {
     // Bazaar is optional; networth still reports liquid coins and coverage gaps.
   }
@@ -49,7 +57,7 @@ export async function buildPriceBook(client: HypixelClient, options?: PriceBookO
     }
   }
 
-  return { prices, basis, sources };
+  return { prices, basis, sources, pricedAt, pricedFromCache };
 }
 
 async function loadExternalPrices(url: string, prices: Map<string, number>): Promise<boolean> {
