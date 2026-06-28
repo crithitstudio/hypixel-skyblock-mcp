@@ -17,6 +17,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Jacob's contests + bingo** — summarize Jacob's farming contest history and
   per-member bingo progress (currently surfaced only as raw data).
 
+## [1.0.2] - 2026-06-28
+
+### Added
+
+- **Automatic retries** for rate-limited (`429`) and transient
+  (`502`/`503`/`504` and network) responses, honoring `Retry-After` /
+  `RateLimit-Reset` headers and otherwise backing off exponentially with
+  jitter. Configurable via `HYPIXEL_MAX_RETRIES` (default `2`). Other `4xx`
+  responses and `success: false` envelopes are never retried.
+- **Bounded response cache**: the in-memory cache now caps its size
+  (`HYPIXEL_CACHE_MAX_ENTRIES`, default `500`), evicting the oldest entry at
+  capacity and dropping expired entries on access, so a long-running server no
+  longer leaks memory. `cache_clear` now reports how many entries it cleared.
+
+### Fixed
+
+- **Version drift**: the MCP server identity and the outbound `User-Agent` are
+  now read from `package.json` at runtime instead of a hardcoded `0.4.0`, so
+  they always match the published version.
+
 ## [1.0.1] - 2026-06-28
 
 ### Changed
@@ -52,6 +72,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - This version was published manually (to bootstrap the package before an OIDC
   trusted publisher could be configured), so it has no provenance attestation.
 
-[Unreleased]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/crithitstudio/hypixel-skyblock-mcp/releases/tag/v1.0.0

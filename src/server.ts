@@ -24,10 +24,11 @@ import {
   resolvePlayer
 } from "./skyblock.js";
 import { createTextResult } from "./utils.js";
+import { VERSION } from "./version.js";
 
 const server = new McpServer({
   name: "hypixel-skyblock",
-  version: "0.4.0"
+  version: VERSION
 });
 const client = new HypixelClient();
 
@@ -400,8 +401,8 @@ server.registerTool(
   },
   async () =>
     runTool(async () => {
-      client.clearCache();
-      return { cleared: true };
+      const clearedEntries = client.clearCache();
+      return { cleared: true, clearedEntries };
     })
 );
 
