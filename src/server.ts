@@ -226,7 +226,7 @@ server.registerTool(
   {
     title: "Estimate SkyBlock Net Worth",
     description:
-      "Estimate a profile's net worth from liquid coins, decoded inventory/storage holdings, and sacks, priced with live Bazaar data (and an optional external lowest-BIN source for auction items). Returns a total, per-section breakdown, top items by value, and pricing coverage. Values are base SkyBlock-ID prices and exclude item modifiers, so treat the total as an estimate.",
+      "Estimate a profile's net worth from liquid coins, decoded inventory/storage holdings, sacks, and supported item modifiers, priced with live Bazaar data (and an optional external lowest-BIN source for auction items). Returns a total, per-section breakdown, top items by value, modifier breakdown, and pricing coverage.",
     inputSchema: {
       ...playerInput,
       ...profileSelectionInput,
@@ -242,7 +242,9 @@ server.registerTool(
       includeModifiers: z
         .boolean()
         .default(true)
-        .describe("Add modifier value (enchantments, hot potato books, recombobulator, essence/master stars) on top of base item prices."),
+        .describe(
+          "Add modifier value (enchantments, hot potato books, recombobulator, essence/master stars, gemstones, reforge stones) on top of base item prices."
+        ),
       topItems: z.number().int().min(1).max(100).default(20),
       includeUnpriced: z.boolean().default(false).describe("List items that could not be priced. Helps explain coverage gaps.")
     }

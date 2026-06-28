@@ -1,3 +1,4 @@
+import reforges from "./reforges.json" with { type: "json" };
 import { priceFor } from "./pricing.js";
 import type { PriceBook } from "./pricing.js";
 import type { DecodedInventoryItem } from "./types.js";
@@ -13,7 +14,9 @@ const APPLICATION_WORTH = {
   recombobulator: 0.8,
   essence: 0.75,
   masterStar: 1,
-  silex: 0.75
+  silex: 0.75,
+  gemstone: 1,
+  reforge: 1
 } as const;
 
 // Per-enchantment overrides (enchantments that should not count at the default 85%).
@@ -39,6 +42,8 @@ const IGNORED_ENCHANTMENTS: Record<string, number> = { SCAVENGER: 5 };
 const STACKING_ENCHANTMENTS = new Set(["EXPERTISE", "COMPACT", "ABSORB", "CULTIVATING", "CHAMPION", "HECATOMB", "TOXOPHILITE"]);
 const IGNORE_SILEX = new Set(["PROMISING_SPADE", "PROMISING_AXE"]);
 const MASTER_STARS = ["FIRST_MASTER_STAR", "SECOND_MASTER_STAR", "THIRD_MASTER_STAR", "FOURTH_MASTER_STAR", "FIFTH_MASTER_STAR"];
+const REFORGES = reforges as Record<string, string>;
+const GENERIC_GEMSTONE_SLOTS = new Set(["COMBAT", "OFFENSIVE", "DEFENSIVE", "MINING", "UNIVERSAL", "CHISEL"]);
 const ALLOWED_RECOMBOBULATED_CATEGORIES = new Set(["ACCESSORY", "NECKLACE", "GLOVES", "BRACELET", "BELT", "CLOAK", "VACUUM"]);
 const ALLOWED_RECOMBOBULATED_IDS = new Set([
   "DIVAN_HELMET",
@@ -74,7 +79,8 @@ function add(breakdown: Record<string, number>, key: string, value: number): voi
 
 /**
  * Values the NBT modifiers on a single decoded item (enchantments, hot potato
- * books, recombobulator, essence stars, master stars) using live Bazaar prices.
+ * books, recombobulator, essence/master stars, gemstones, reforges) using live
+ * Bazaar prices.
  * Components missing from the price book are counted in `unpriced` rather than
  * silently assumed free, and never fabricated.
  */
@@ -203,5 +209,62 @@ export function valueItemModifiers(
     }
   }
 
+  // --- Gemstones ---
+  for (const [key, rawValue] of Object.entries(item.gems ?? {})) {
+    const normalizedKey = key.toLowerCase();
+    if (normalizedKey === "unlocked_slots" || normalizedKey.endsWith("_gem")) {
+      continue;
+    }
+
+    const slotType = key.replace(/_\d+$/, "").toUpperCase();
+    const type = GENERIC_GEMSTONE_SLOTS.has(slotType) ? gemstoneString(item.gems?.[`${key}_gem`]) : slotType;
+    const tier = gemstoneTier(rawValue);
+    if (!type || !tier) {
+      continue;
+    }
+
+    const unit = price(`${tier}_${type}_GEM`);
+    if (unit !== undefined) {
+      const value = unit * APPLICATION_WORTH.gemstone;
+      total += value;
+      add(breakdown, "gemstones", value);
+    } else {
+      unpriced += 1;
+    }
+  }
+
+  // --- Reforge stones ---
+  const category = meta?.category?.toUpperCase();
+  const reforge = item.reforge?.toLowerCase();
+  if (reforge && category !== "ACCESSORY") {
+    const stoneId = REFORGES[reforge];
+    if (stoneId) {
+      const unit = price(stoneId);
+      if (unit !== undefined) {
+        const value = unit * APPLICATION_WORTH.reforge;
+        total += value;
+        add(breakdown, "reforge", value);
+      } else {
+        unpriced += 1;
+      }
+    }
+  }
+
   return { total, breakdown, unpriced };
+}
+
+function gemstoneTier(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.toUpperCase();
+  }
+
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return gemstoneString((value as { quality?: unknown }).quality);
+  }
+
+  return undefined;
+}
+
+function gemstoneString(value: unknown): string | undefined {
+  return typeof value === "string" && value ? value.toUpperCase() : undefined;
 }

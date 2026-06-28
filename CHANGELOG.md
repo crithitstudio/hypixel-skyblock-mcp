@@ -8,14 +8,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Roadmap (planned for 1.1.0)
 
-- **Net worth: gemstone + reforge valuation** — value socketed gemstones and
-  reforge stones (the largest remaining accuracy gap), following the
-  SkyHelper-Networth methodology. Gems and reforges are already decoded.
 - **Trophy fish** — summarize trophy-fish tiers and catches in the profile.
 - **Dungeon + pet-score detail** — deeper dungeon class/run reporting and
   per-pet score / pet-item valuation.
 - **Jacob's contests + bingo** — summarize Jacob's farming contest history and
   per-member bingo progress (currently surfaced only as raw data).
+
+## [1.0.3] - 2026-06-28
+
+### Added
+
+- **Net worth: gemstone + reforge valuation** — socketed gemstones and reforge
+  stones are now valued at full live Bazaar price, matching the
+  SkyHelper-Networth application-worth rules. Generic gemstone slots resolve
+  their sibling gem type, accessory reforges are skipped, and basic coin
+  reforges are ignored instead of being counted as missing prices.
+
+### Changed
+
+- Updated `skyblock_networth` descriptions and disclaimer text to document the
+  new modifier categories and the remaining gemstone slot-unlock cost gap.
 
 ## [1.0.2] - 2026-06-28
 
@@ -72,7 +84,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - This version was published manually (to bootstrap the package before an OIDC
   trusted publisher could be configured), so it has no provenance attestation.
 
-[Unreleased]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/crithitstudio/hypixel-skyblock-mcp/releases/tag/v1.0.0

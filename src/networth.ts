@@ -29,8 +29,9 @@ const NETWORTH_SECTION_TYPES = [
 
 const DISCLAIMER =
   "Estimate. Base item value is the SkyBlock-ID market price; on top of that, modifier value is added for " +
-  "enchantments, hot potato/fuming books, recombobulators, and essence/master stars, valued at SkyHelper-Networth " +
-  "'application worth' fractions of live Bazaar prices. Reforges, gemstones, and pet levels are still excluded. " +
+  "enchantments, hot potato/fuming books, recombobulators, essence/master stars, gemstones, and reforge stones, " +
+  "valued at SkyHelper-Networth 'application worth' fractions of live Bazaar prices. Gemstones and reforge stones " +
+  "are valued at full Bazaar price; gemstone slot-unlock costs and pet levels are still excluded. " +
   "Modifier value is only added to items that have a base price, so auction-only gear (no Bazaar base price) is " +
   "still undervalued unless an external lowest-BIN source (SKYBLOCK_LOWEST_BIN_URL) is configured.";
 

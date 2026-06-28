@@ -84,7 +84,7 @@ workflow in the package's npm settings instead.
 
 ### Economy & resources
 
-- `skyblock_networth`: estimate a profile's net worth from liquid coins, decoded inventory/storage holdings, and sacks, priced with live Bazaar data. Returns a total, per-section breakdown, top items by value, and a pricing-coverage report.
+- `skyblock_networth`: estimate a profile's net worth from liquid coins, decoded inventory/storage holdings, sacks, and supported item modifiers, priced with live Bazaar data. Returns a total, per-section breakdown, modifier breakdown, top items by value, and a pricing-coverage report.
 - `skyblock_item`: look up one item by ID or name and get official metadata plus a live value (Bazaar buy/sell/spread/volume, lowest-BIN when configured, or a clear auction-only note). Ambiguous searches return candidate IDs, and it resolves in-game names (e.g. "Necron's Chestplate") to canonical IDs.
 - `skyblock_resource`: items, skills, collections, election/mayor, bingo, or news.
 - `skyblock_bazaar`: Bazaar prices, volumes, and spread signals.
@@ -142,9 +142,9 @@ workflow in the package's npm settings instead.
 - **Items** in decoded inventory, ender chest, backpacks, personal vault, wardrobe, armor, equipment, and bags, priced by SkyBlock ID via the **Bazaar**.
 - **Sacks**, priced via the Bazaar.
 
-On top of the **base SkyBlock-ID price**, `skyblock_networth` adds **modifier value** for enchantments, hot potato/fuming books, recombobulators, and essence/master stars (set `includeModifiers: false` to disable). Each modifier is valued at the [SkyHelper-Networth](https://github.com/Altpapier/SkyHelper-Networth) "application worth" fraction of the live Bazaar price of the component (e.g. enchantments at 85%, essence at 75%), and essence/master-star costs come from the official items resource's `upgrade_costs`. The response reports `items.modifiers` (total, `byType` breakdown, and `unpricedComponents`).
+On top of the **base SkyBlock-ID price**, `skyblock_networth` adds **modifier value** for enchantments, hot potato/fuming books, recombobulators, essence/master stars, socketed gemstones, and reforge stones (set `includeModifiers: false` to disable). Each modifier is valued at the [SkyHelper-Networth](https://github.com/Altpapier/SkyHelper-Networth) "application worth" fraction of the live Bazaar price of the component (e.g. enchantments at 85%, essence at 75%, gemstones and reforge stones at 100%), and essence/master-star costs come from the official items resource's `upgrade_costs`. The response reports `items.modifiers` (total, `byType` breakdown, and `unpricedComponents`).
 
-The modifier categories above are the ones currently modelled. SkyHelper values several more that this server does **not** yet add, so `total` is a conservative estimate for heavily upgraded items: reforges, gemstones and gemstone slots, runes, dyes, pet items/pet levels, art of war/peace, power scrolls, and other cosmetic or upgrade consumables are excluded. Gemstone and reforge valuation is on the roadmap (see [CHANGELOG.md](CHANGELOG.md)).
+The modifier categories above are the ones currently modelled. SkyHelper values several more that this server does **not** yet add, so `total` is a conservative estimate for heavily upgraded items: gemstone slot-unlock costs, runes, dyes, pet items/pet levels, art of war/peace, power scrolls, and other cosmetic or upgrade consumables are excluded.
 
 Modifier value is only added to items that already have a base price, so auction-only gear is undervalued unless a lowest-BIN source is configured. Read the `coverage` report (`pricedPercent`) to see how much of the profile could be priced, and treat `total` as an estimate.
 

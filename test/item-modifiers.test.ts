@@ -72,6 +72,57 @@ describe("item modifier valuation", () => {
     expect(result.breakdown.masterStars).toBe(200);
   });
 
+  it("values direct-slot gemstones at full Bazaar price", () => {
+    const item: DecodedInventoryItem = { skyblockId: "DIVAN_CHESTPLATE", gems: { RUBY_0: "PERFECT" } };
+    const result = valueItemModifiers(item, book({ PERFECT_RUBY_GEM: 1_000_000 }), { category: "CHESTPLATE" });
+
+    expect(result.breakdown.gemstones).toBe(1_000_000);
+    expect(result.total).toBe(1_000_000);
+  });
+
+  it("values generic-slot gemstones using the sibling gem type", () => {
+    const item: DecodedInventoryItem = {
+      skyblockId: "TERMINATOR",
+      gems: { COMBAT_0: { quality: "PERFECT" }, COMBAT_0_gem: "JASPER" }
+    };
+    const result = valueItemModifiers(item, book({ PERFECT_JASPER_GEM: 2_000_000 }), { category: "BOW" });
+
+    expect(result.breakdown.gemstones).toBe(2_000_000);
+    expect(result.total).toBe(2_000_000);
+  });
+
+  it("skips gemstone metadata keys and counts unpriced gemstone components", () => {
+    const item: DecodedInventoryItem = {
+      skyblockId: "DIVAN_LEGGINGS",
+      gems: {
+        unlocked_slots: ["JADE_0"],
+        JADE_0_gem: "AMBER",
+        JADE_0: "FINE",
+        AMBER_0: "PERFECT"
+      }
+    };
+    const result = valueItemModifiers(item, book({ FINE_JADE_GEM: 100 }), { category: "LEGGINGS" });
+
+    expect(result.breakdown.gemstones).toBe(100);
+    expect(result.total).toBe(100);
+    expect(result.unpriced).toBe(1);
+  });
+
+  it("values reforge stones, ignores basic reforges, and skips accessory reforges", () => {
+    const prices = book({ MIDAS_JEWEL: 5_000_000 });
+    const gilded: DecodedInventoryItem = { skyblockId: "MIDAS_SWORD", reforge: "gilded" };
+    expect(valueItemModifiers(gilded, prices, { category: "SWORD" }).breakdown.reforge).toBe(5_000_000);
+    expect(valueItemModifiers(gilded, book({}), { category: "SWORD" }).unpriced).toBe(1);
+
+    const basic: DecodedInventoryItem = { skyblockId: "ASPECT_OF_THE_END", reforge: "sharp" };
+    const basicResult = valueItemModifiers(basic, prices, { category: "SWORD" });
+    expect(basicResult.breakdown.reforge).toBeUndefined();
+    expect(basicResult.unpriced).toBe(0);
+
+    const accessory: DecodedInventoryItem = { skyblockId: "SOME_TALISMAN", reforge: "gilded" };
+    expect(valueItemModifiers(accessory, prices, { category: "ACCESSORY" }).breakdown.reforge).toBeUndefined();
+  });
+
   it("counts unpriced components instead of assuming them free", () => {
     const item: DecodedInventoryItem = { skyblockId: "HYPERION", enchantments: { sharpness: 6 }, hotPotatoCount: 5 };
     const result = valueItemModifiers(item, book({}), undefined);
