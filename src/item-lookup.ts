@@ -4,6 +4,7 @@ import type { PriceBasis } from "./pricing.js";
 import { getBazaar } from "./skyblock.js";
 import type { JsonObject } from "./types.js";
 import { asArray, asNumber, asRecord, asString, compactObject, stripMinecraftFormatting } from "./utils.js";
+import { getOfficialWikiItemContext } from "./wiki.js";
 
 export type ItemLookupOptions = {
   itemId?: string;
@@ -11,6 +12,8 @@ export type ItemLookupOptions = {
   includeBazaarOrders?: boolean;
   priceBasis?: PriceBasis;
   maxCandidates?: number;
+  includeWiki?: boolean;
+  maxWikiSectionChars?: number;
 };
 
 type ResolvedItem = { id: string; record: JsonObject };
@@ -161,10 +164,22 @@ export async function lookupItem(client: HypixelClient, options: ItemLookupOptio
     }
   }
 
+  const item = summarizeIdentity(id, record);
+  const wiki = options.includeWiki
+    ? await getOfficialWikiItemContext(
+        { id, name: asString(item.name) },
+        { maxSectionChars: options.maxWikiSectionChars }
+      ).catch((error) => ({
+        source: "official_hypixel_skyblock_wiki",
+        error: error instanceof Error ? error.message : String(error)
+      }))
+    : undefined;
+
   return compactObject({
     meta: itemsResult.meta,
     found: true,
-    item: summarizeIdentity(id, record),
-    value
+    item,
+    value,
+    wiki
   });
 }

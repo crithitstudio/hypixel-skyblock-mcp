@@ -85,8 +85,10 @@ workflow in the package's npm settings instead.
 ### Economy & resources
 
 - `skyblock_networth`: estimate a profile's net worth from liquid coins, decoded inventory/storage holdings, sacks, and supported item modifiers, priced with live Bazaar data. Returns a total, per-section breakdown, modifier breakdown, top items by value, and a pricing-coverage report.
-- `skyblock_item`: look up one item by ID or name and get official metadata plus a live value (Bazaar buy/sell/spread/volume, lowest-BIN when configured, or a clear auction-only note). Ambiguous searches return candidate IDs, and it resolves in-game names (e.g. "Necron's Chestplate") to canonical IDs.
+- `skyblock_item`: look up one item by ID or name and get official metadata plus a live value (Bazaar buy/sell/spread/volume, lowest-BIN when configured, or a clear auction-only note). Set `includeWiki: true` to enrich the result with official Hypixel SkyBlock Wiki page URL, revision timestamp, and cleaned obtaining/upgrading/usage/history sections. Ambiguous searches return candidate IDs, and it resolves in-game names (e.g. "Necron's Chestplate") to canonical IDs.
 - `skyblock_resource`: items, skills, collections, election/mayor, bingo, or news.
+- `skyblock_wiki_search`: search the official Hypixel SkyBlock Wiki through its MediaWiki API.
+- `skyblock_wiki_page`: fetch a specific official wiki page and return AI-readable section summaries from the page wikitext.
 - `skyblock_bazaar`: Bazaar prices, volumes, and spread signals.
 - `skyblock_auctions`: active pages, ended auctions, or keyed lookups.
 - `skyblock_essence_costs`: exact essence, coin, and material cost to star up (or master-star) a dungeon/crimson item by SkyBlock ID, with an optional live-Bazaar coin estimate. Returns `found: false` with suggestions for unknown or non-upgradeable IDs.

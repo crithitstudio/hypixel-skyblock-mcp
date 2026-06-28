@@ -14,6 +14,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Jacob's contests + bingo** — summarize Jacob's farming contest history and
   per-member bingo progress (currently surfaced only as raw data).
 
+## [1.0.4] - 2026-06-28
+
+### Added
+
+- **Official Wiki knowledge**: added `skyblock_wiki_search` and
+  `skyblock_wiki_page` tools backed by the official Hypixel SkyBlock Wiki
+  MediaWiki API, plus optional `skyblock_item includeWiki` enrichment with page
+  URL, revision timestamp, and cleaned obtaining/upgrading/usage/history
+  sections.
+
 ## [1.0.3] - 2026-06-28
 
 ### Added
@@ -84,7 +94,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - This version was published manually (to bootstrap the package before an OIDC
   trusted publisher could be configured), so it has no provenance attestation.
 
-[Unreleased]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.3...HEAD
+[Unreleased]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.0...v1.0.1

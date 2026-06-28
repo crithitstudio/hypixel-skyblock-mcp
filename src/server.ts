@@ -25,6 +25,7 @@ import {
 } from "./skyblock.js";
 import { createTextResult } from "./utils.js";
 import { VERSION } from "./version.js";
+import { getOfficialWikiPage, searchOfficialWiki } from "./wiki.js";
 
 const server = new McpServer({
   name: "hypixel-skyblock",
@@ -339,16 +340,54 @@ server.registerTool(
   {
     title: "Look Up SkyBlock Item",
     description:
-      "Look up a single SkyBlock item by ID or name and return its official metadata (tier, category, stats, NPC price, museum/soulbound flags) plus a live value: full Bazaar buy/sell/spread/volume for Bazaar items, or a lowest-BIN price when an external source is configured, otherwise a clear auction-only note. Ambiguous searches return candidate IDs instead of guessing.",
+      "Look up a single SkyBlock item by ID or name and return its official metadata (tier, category, stats, NPC price, museum/soulbound flags) plus a live value: full Bazaar buy/sell/spread/volume for Bazaar items, or a lowest-BIN price when an external source is configured, otherwise a clear auction-only note. Set includeWiki for official Hypixel SkyBlock Wiki obtaining/usage/upgrading/history context. Ambiguous searches return candidate IDs instead of guessing.",
     inputSchema: {
       itemId: z.string().min(1).optional().describe("Exact SkyBlock item ID, for example HYPERION or ENCHANTED_DIAMOND."),
       search: z.string().min(1).optional().describe("Item name or substring when the exact ID is unknown."),
       includeBazaarOrders: z.boolean().default(false).describe("Include top Bazaar buy/sell order summaries for Bazaar items."),
       priceBasis: z.enum(["buy", "sell"]).default("buy").describe("Price basis used only for the lowest-BIN fallback."),
-      maxCandidates: z.number().int().min(1).max(50).default(15).describe("Max candidate IDs to return for an ambiguous search.")
+      maxCandidates: z.number().int().min(1).max(50).default(15).describe("Max candidate IDs to return for an ambiguous search."),
+      includeWiki: z.boolean().default(false).describe("Fetch official Hypixel SkyBlock Wiki context for the resolved item."),
+      maxWikiSectionChars: z
+        .number()
+        .int()
+        .min(200)
+        .max(2_500)
+        .default(900)
+        .describe("Maximum characters per wiki section when includeWiki is true.")
     }
   },
   async (input) => runTool(() => lookupItem(client, input))
+);
+
+server.registerTool(
+  "skyblock_wiki_search",
+  {
+    title: "Search Official SkyBlock Wiki",
+    description:
+      "Search the official Hypixel SkyBlock Wiki through its MediaWiki API. Use this for item, mechanic, update, NPC, location, and guide-page discovery from first-party wiki data.",
+    inputSchema: {
+      search: z.string().min(1).describe("Search query, for example Hyperion, Lotus Atoll, or Armor."),
+      limit: z.number().int().min(1).max(25).default(10)
+    }
+  },
+  async ({ search, limit }) => runTool(() => searchOfficialWiki(search, { limit }))
+);
+
+server.registerTool(
+  "skyblock_wiki_page",
+  {
+    title: "Fetch Official SkyBlock Wiki Page",
+    description:
+      "Fetch one official Hypixel SkyBlock Wiki page via MediaWiki query/revisions and return cleaned AI-readable section summaries. For item pages, this extracts summary, obtaining, upgrading, usage, history, and trivia when present.",
+    inputSchema: {
+      title: z.string().min(1).optional().describe("Exact wiki page title, for example Hyperion or Necron's Blade Scrolls."),
+      search: z.string().min(1).optional().describe("Fallback wiki search query when title is unknown or missing."),
+      includeRaw: z.boolean().default(false).describe("Include raw wikitext. Large and usually unnecessary."),
+      maxSectionChars: z.number().int().min(200).max(2_500).default(900)
+    }
+  },
+  async (input) => runTool(() => getOfficialWikiPage(input))
 );
 
 server.registerTool(
