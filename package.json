@@ -1,0 +1,57 @@
+{
+  "name": "hypixel-skyblock-mcp",
+  "version": "1.0.0",
+  "description": "AI-friendly MCP server for Hypixel SkyBlock profiles, economy data, resources, and guide context.",
+  "type": "module",
+  "author": "crithitstudio <joey.weis@crithitstudio.com>",
+  "homepage": "https://github.com/crithitstudio/hypixel-skyblock-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/crithitstudio/hypixel-skyblock-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/crithitstudio/hypixel-skyblock-mcp/issues"
+  },
+  "keywords": [
+    "hypixel",
+    "skyblock",
+    "mcp",
+    "model-context-protocol",
+    "minecraft",
+    "bazaar",
+    "networth"
+  ],
+  "bin": {
+    "hypixel-skyblock-mcp": "dist/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && cp src/skill-tables.json dist/skill-tables.json && cp src/benchmarks.json dist/benchmarks.json && cp src/essence-costs.json dist/essence-costs.json",
+    "dev": "tsx src/server.ts",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "check": "npm run build && npm test",
+    "prepublishOnly": "npm run check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "prismarine-nbt": "^2.8.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "@vitest/coverage-v8": "^4.1.9",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

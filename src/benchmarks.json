@@ -1,0 +1,47 @@
+{
+  "skills": {
+    "recommendedForMidgame": 40,
+    "recommendedForLategame": 50,
+    "max": 60
+  },
+  "catacombs": {
+    "unlocksF7": 40,
+    "recommendedForM7": 38,
+    "masterModeEntry": 47
+  },
+  "accessories": {
+    "early": 200,
+    "mid": 400,
+    "late": 565,
+    "endgame": 700
+  },
+  "garden": {
+    "plotsUnlockedMid": 12,
+    "plotsUnlockedLate": 20,
+    "levelForFarming50": 10,
+    "levelForFarming60": 15
+  },
+  "slayers": {
+    "recommendedT4": 4,
+    "recommendedT5": 5,
+    "recommendedT6": 6
+  },
+  "hotm": {
+    "recommendedForCrystalHollows": 5,
+    "recommendedForNucleus": 7
+  },
+  "hotf": {
+    "recommendedWhispersSpent": 100000,
+    "recommendedPerks": 5
+  },
+  "pets": {
+    "recommendedScore": 90
+  },
+  "fairySouls": {
+    "total": 273
+  },
+  "essence": {
+    "witherForFiveStar": 5000,
+    "crimsonForCrimsonGear": 1000
+  }
+}
