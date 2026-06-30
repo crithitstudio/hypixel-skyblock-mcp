@@ -23,6 +23,7 @@ import {
   listSkyblockProfiles,
   resolvePlayer
 } from "./skyblock.js";
+import { getUpgradeAdvisor } from "./upgrade-advisor.js";
 import { createTextResult } from "./utils.js";
 import { VERSION } from "./version.js";
 import { getOfficialWikiPage, searchOfficialWiki } from "./wiki.js";
@@ -231,6 +232,31 @@ server.registerTool(
     }
   },
   async (input) => runTool(() => getSkyblockAudit(client, input))
+);
+
+server.registerTool(
+  "skyblock_upgrade_advisor",
+  {
+    title: "Advise SkyBlock Upgrades",
+    description:
+      "Rank the gear and accessory upgrades available to a profile that can be honestly costed today: remaining essence-star costs on equipped gear, and next-tier accessory upgrades (priced when a lowest-BIN source is configured). Returns a budget-aware, ranked action list with per-upgrade confidence and caveats, plus a coverage block that names which requested sources are not yet supported (reforge/enchant/HOTM/pet) instead of inventing stat or cost numbers.",
+    inputSchema: {
+      ...playerInput,
+      ...profileSelectionInput,
+      sources: z
+        .array(z.enum(["star", "accessory", "reforge", "enchant", "hotm", "pet"]))
+        .max(6)
+        .optional()
+        .describe("Upgrade sources to consider. Supported today: star, accessory. Others are reported as unsupported with a reason."),
+      priceBasis: z
+        .enum(["buy", "sell"])
+        .default("buy")
+        .describe("buy = replacement cost (insta-buy), sell = liquidation value (insta-sell)."),
+      budgetCoins: z.number().int().min(0).optional().describe("Only keep priced upgrades at or below this coin budget."),
+      limit: z.number().int().min(1).max(50).default(20)
+    }
+  },
+  async (input) => runTool(() => getUpgradeAdvisor(client, input))
 );
 
 server.registerTool(
