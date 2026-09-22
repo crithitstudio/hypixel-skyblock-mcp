@@ -1,6 +1,6 @@
 {
   "name": "hypixel-skyblock-mcp",
-  "version": "1.0.5",
+  "version": "1.1.0",
   "description": "AI-friendly MCP server for Hypixel SkyBlock profiles, economy data, resources, and guide context.",
   "type": "module",
   "author": "crithitstudio <joey.weis@crithitstudio.com>",
@@ -32,11 +32,13 @@
     ".env.example"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && cp src/skill-tables.json dist/skill-tables.json && cp src/benchmarks.json dist/benchmarks.json && cp src/essence-costs.json dist/essence-costs.json && cp src/reforges.json dist/reforges.json",
+    "build": "node scripts/build.mjs",
     "dev": "tsx src/server.ts",
     "test": "vitest run",
     "coverage": "vitest run --coverage",
-    "check": "npm run build && npm test",
+    "smoke": "node scripts/smoke.mjs",
+    "check": "npm run build && npm run coverage && npm run smoke",
+    "prepack": "npm run build",
     "prepublishOnly": "npm run check"
   },
   "engines": {

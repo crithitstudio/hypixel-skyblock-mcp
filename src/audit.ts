@@ -1,19 +1,19 @@
 import benchmarks from "./benchmarks.json" with { type: "json" };
 import { analyzeAccessoryBag, suggestAccessoryUpgrades } from "./accessories.js";
-import { inferPrimaryRole, summarizeEquippedGear, summarizeGearQuality, summarizeLoadouts } from "./gear.js";
+import { summarizeEquippedGear, summarizeGearQuality, summarizeLoadouts } from "./gear.js";
 import type { HypixelClient } from "./hypixelClient.js";
 import { summarizeEquippedEssenceUpgrades } from "./essence-costs.js";
 import type { EquippedGearPiece } from "./essence-costs.js";
-import { catacombsLevelFromXp, gardenLevelFromXp, petLevelFromExp, skillLevelFromXp, summarizeSkillLevels } from "./levels.js";
+import { catacombsLevelFromXp, gardenLevelFromXp, petLevelFromExp, summarizeSkillLevels } from "./levels.js";
 import { buildPlayerRatings } from "./metrics.js";
 import { summarizeMayor } from "./mayor.js";
-import { summarizeProgression } from "./progression.js";
+import { summarizeMuseumMember, summarizeProgression } from "./progression.js";
+import { findNbtDataLocations } from "./nbt.js";
 import { countUnplacedNucleusCrystals } from "./skill-trees.js";
 import {
   getBazaar,
   getSkyblockProfileContext,
-  getSkyblockResource,
-  loadProfileMember
+  getSkyblockResource
 } from "./skyblock.js";
 import type { DecodedInventory, JsonObject } from "./types.js";
 import { asArray, asNumber, asRecord, asString, compactObject, getPath, sortByNumeric } from "./utils.js";
@@ -58,24 +58,40 @@ export async function getSkyblockAudit(client: HypixelClient, options: AuditOpti
     decodeInventories: true,
     includeGarden: true,
     includeMuseum: true,
+    includeRawMember: true,
     includeItemDetails: false,
-    maxItemsPerInventory: 20,
-    maxInventorySections: 32,
+    maxItemsPerInventory: 500,
+    maxInventorySections: 120,
     inventorySectionTypes: ["armor", "equipment", "loadout", "accessory_bag", "inventory"],
     maxLoreLines: 4
   });
 
   const member = asRecord(profileContext.member);
-  const rawMember = await loadRawMember(client, options);
+  const rawMember = asRecord(profileContext.rawMember);
   const progression = rawMember ? summarizeProgression(rawMember) : undefined;
+  const warnings: string[] = [];
+  for (const endpoint of ["garden", "museum"]) {
+    const error = asString(asRecord(profileContext[endpoint])?.error);
+    if (error) warnings.push(`${endpoint} data unavailable: ${error}`);
+  }
   const decodedInventories = asArray(profileContext.decodedInventories) as DecodedInventory[] | undefined;
   const skillLevels = buildSkillLevelDetails(member);
   const skillsForGear = toSkillLevelMap(skillLevels);
   const equipped = summarizeEquippedGear(decodedInventories);
   const loadouts = summarizeLoadouts(decodedInventories);
   const accessoryAnalysis = analyzeAccessoryBag(member);
-  const accessoryBag = decodedInventories?.find((section) => section.sectionType === "accessory_bag");
-  const accessoryUpgrades = suggestAccessoryUpgrades(accessoryBag?.items);
+  const accessorySections = decodedInventories?.filter((section) => section.sectionType === "accessory_bag") ?? [];
+  const accessoryLocations = findNbtDataLocations(rawMember).filter((section) => section.sectionType === "accessory_bag");
+  const accessoryInventoryComplete = accessoryLocations.length > 0 &&
+    accessoryLocations.every((location) => accessorySections.some((section) => section.path === location.path && !section.error && !section.truncated));
+  const accessoryUpgrades = accessoryInventoryComplete
+    ? suggestAccessoryUpgrades(accessorySections.flatMap((section) => section.items))
+    : [];
+  if (!accessoryInventoryComplete) warnings.push("Accessory inventory is unavailable or incomplete; upgrade suggestions are omitted.");
+  for (const section of decodedInventories ?? []) {
+    if (section.error) warnings.push(`Inventory section ${section.path} could not be decoded: ${section.error}`);
+    else if (section.truncated) warnings.push(`Inventory section ${section.path} is truncated (${section.shownItems}/${section.itemCount} items).`);
+  }
   const gearQuality = summarizeGearQuality(equipped, skillsForGear);
   const meta = asRecord(profileContext.meta);
   const gaps = detectGaps({
@@ -91,23 +107,31 @@ export async function getSkyblockAudit(client: HypixelClient, options: AuditOpti
     memberUuid: asString(meta?.selectedMemberUuid)
   });
 
+  const optional = async (label: string, operation: Promise<JsonObject | undefined>): Promise<JsonObject | undefined> => {
+    try { return await operation; }
+    catch (error) {
+      warnings.push(`${label} unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return undefined;
+    }
+  };
+
   const [mayor, bazaar, essenceUpgrades] = await Promise.all([
     options.includeMayor === false
       ? Promise.resolve(undefined)
-      : getSkyblockResource(client, { kind: "election", includeRaw: true }).catch(() => undefined),
+      : optional("Mayor", getSkyblockResource(client, { kind: "election", includeRaw: true })),
     options.includeEconomy === false
       ? Promise.resolve(undefined)
-      : buildPersonalizedBazaar(client, member),
+      : optional("Bazaar", buildPersonalizedBazaar(client, member)),
     options.includeEconomy === false
       ? Promise.resolve(undefined)
-      : summarizeEquippedEssenceUpgrades(client, collectEquippedPieces(equipped)).catch(() => undefined)
+      : optional("Essence upgrade prices", summarizeEquippedEssenceUpgrades(client, collectEquippedPieces(equipped)))
   ]);
 
   const upgradeGap = buildEssenceUpgradeGap(focus, essenceUpgrades);
   const allGaps = upgradeGap ? sortGaps([...gaps, upgradeGap]) : gaps;
 
   const mayorSummary = summarizeMayor(mayor);
-  const nextActions = buildNextActions(allGaps, mayorSummary, equipped);
+  const nextActions = buildNextActions(allGaps, mayorSummary);
 
   const dungeonLevels = summarizeDungeonLevels(member);
   const ratings = buildPlayerRatings({
@@ -128,8 +152,11 @@ export async function getSkyblockAudit(client: HypixelClient, options: AuditOpti
     slayers: member?.slayers,
     dungeons: dungeonLevels,
     pets: summarizePetLevels(member),
+    trophyFish: member?.trophyFish,
+    farmingContests: member?.farmingContests,
     accessories: compactObject({
       ...accessoryAnalysis,
+      inventoryComplete: accessoryInventoryComplete,
       upgradeSuggestions: accessoryUpgrades
     }),
     gear: compactObject({
@@ -150,10 +177,12 @@ export async function getSkyblockAudit(client: HypixelClient, options: AuditOpti
     nextActions,
     mayor: mayorSummary,
     privacy: profileContext.privacy,
+    warnings,
     meta: compactObject({
       profileSource: getPath(profileContext, ["meta", "profileSource"]),
       truncationNotes: [
-        "Audit decodes armor, equipment, loadout, accessory bag, and a small inventory slice.",
+        "Audit analyzes up to 500 items per section and 120 armor, equipment, loadout, accessory, and inventory sections; any incomplete sections are reported in warnings.",
+        "Gear quality describes the currently equipped set only; stored gear may be stronger. Magical Power is the highest recorded API value.",
         "Use skyblock_storage for merged backpack/ender/vault/sack search.",
         "Use skyblock_inventory for raw per-section NBT decoding."
       ]
@@ -167,11 +196,6 @@ export async function getSkyblockAudit(client: HypixelClient, options: AuditOpti
       approximateResponseBytes: JSON.stringify(payload).length
     }
   };
-}
-
-async function loadRawMember(client: HypixelClient, options: AuditOptions): Promise<JsonObject | undefined> {
-  const loaded = await loadProfileMember(client, options);
-  return loaded.member;
 }
 
 function defaultFocus(): AuditFocus[] {
@@ -270,7 +294,8 @@ function summarizeDungeonLevels(member: JsonObject | undefined): JsonObject | un
     selectedClass: dungeons.selectedClass,
     catacombs: catacombsXp !== undefined ? catacombsLevelFromXp(catacombsXp) : undefined,
     highestTierCompleted: catacombs?.highestTierCompleted,
-    classLevels
+    classLevels,
+    dungeonTypes: dungeons.dungeonTypes
   });
 }
 
@@ -314,8 +339,8 @@ function buildSummary(
     bank: profile?.bank,
     skyblockLevel: getPath(progression, ["skyblockLevel", "level"]),
     magicalPower: getPath(member, ["accessoryBag", "highestMagicalPower"]),
-    fairySouls: fairySouls
-      ? `${asNumber(fairySouls.collected) ?? 0}/${asNumber(fairySouls.totalAvailable) ?? benchmarks.fairySouls.total}`
+    fairySouls: asNumber(fairySouls?.collected) !== undefined
+      ? `${fairySouls!.collected}/${asNumber(fairySouls!.totalAvailable) ?? benchmarks.fairySouls.total}`
       : undefined,
     nucleusRuns: getPath(progression, ["milestones", "nucleusRuns"]),
     primaryRole: asString(equipped?.inferredRole)
@@ -351,20 +376,25 @@ function buildEssenceUpgradeGap(focus: AuditFocus[], essenceUpgrades: JsonObject
     return undefined;
   }
 
-  const total = asNumber(essenceUpgrades.estimatedTotalCoins) ?? 0;
+  const total = asNumber(essenceUpgrades.estimatedTotalCoins);
   const pieces = asArray(essenceUpgrades.perPiece)?.length ?? 0;
-  if (pieces === 0 || total <= 0) {
+  if (pieces === 0) {
     return undefined;
   }
 
   return {
     area: "dungeons",
     severity: "low",
-    message: `Equipped gear is not fully starred: finishing the essence stars on ${pieces} piece(s) costs about ${total.toLocaleString()} coins.`,
-    evidence: {
+    message: total !== undefined
+      ? `Equipped gear is not fully starred: finishing the essence stars on ${pieces} piece(s) costs about ${total.toLocaleString()} coins.`
+      : `Equipped gear is not fully starred: ${pieces} piece(s) have remaining essence upgrades, but missing component prices prevent a full cost estimate.`,
+    evidence: compactObject({
       estimatedTotalCoins: total,
+      pricedSubtotalCoins: essenceUpgrades.pricedSubtotalCoins,
+      pricingComplete: essenceUpgrades.pricingComplete,
+      unpriced: essenceUpgrades.unpriced,
       essenceByType: essenceUpgrades.essenceByType
-    }
+    })
   };
 }
 
@@ -391,24 +421,11 @@ function summarizeGardenAudit(garden: JsonObject | undefined): JsonObject | unde
 }
 
 function extractMuseumSummary(museum: JsonObject | undefined, memberUuid: string | undefined): JsonObject | undefined {
-  const members = asRecord(asRecord(museum?.data)?.members) ?? asRecord(getPath(museum, ["data", "members"]));
-  if (!members || !memberUuid) {
-    return undefined;
-  }
-
-  const member = asRecord(members[memberUuid]);
-  if (!member) {
-    return undefined;
-  }
-
-  return compactObject({
-    value: asNumber(member.value),
-    itemCount: asArray(member.items)?.length
-  });
+  return summarizeMuseumMember(museum, memberUuid);
 }
 
 async function buildPersonalizedBazaar(client: HypixelClient, member: JsonObject | undefined): Promise<JsonObject | undefined> {
-  const collections = asRecord(member?.collections);
+  const collections = asRecord(getPath(member, ["collections", "top"]));
   if (!collections) {
     return undefined;
   }
@@ -425,6 +442,8 @@ async function buildPersonalizedBazaar(client: HypixelClient, member: JsonObject
   const bazaar = await getBazaar(client, { productIds: topCollections, limit: topCollections.length });
   return compactObject({
     basedOnCollections: topCollections,
+    freshness: bazaar.freshness,
+    caveats: bazaar.caveats,
     products: bazaar.products
   });
 }
@@ -460,8 +479,8 @@ function detectGaps(input: {
   const gaps: AuditGap[] = [];
 
   if (input.focus.includes("accessories")) {
-    const mp = asNumber(input.accessoryAnalysis?.magicalPower) ?? 0;
-    if (mp < benchmarks.accessories.endgame) {
+    const mp = asNumber(input.accessoryAnalysis?.magicalPower);
+    if (mp !== undefined && mp < benchmarks.accessories.endgame) {
       gaps.push({
         area: "accessories",
         severity: mp < benchmarks.accessories.mid ? "high" : "medium",
@@ -470,14 +489,6 @@ function detectGaps(input: {
       });
     }
 
-    const issues = asArray(input.accessoryAnalysis?.issues)?.map((value) => asString(value)).filter(Boolean) ?? [];
-    for (const issue of issues) {
-      gaps.push({
-        area: "accessories",
-        severity: "medium",
-        message: issue!
-      });
-    }
   }
 
   if (input.focus.includes("farming")) {
@@ -488,10 +499,10 @@ function detectGaps(input: {
     const gardenLevel =
       gardenExp !== undefined
         ? gardenLevelFromXp(gardenExp).level
-        : asNumber(getPath(input.progression, ["garden", "level", "level"])) ?? 0;
-    const plots = asArray(input.garden?.unlocked_plots_ids)?.length ?? asNumber(input.garden?.unlockedPlots) ?? 0;
+        : asNumber(getPath(input.progression, ["garden", "level", "level"]));
+    const plots = asArray(input.garden?.unlocked_plots_ids)?.length ?? asNumber(input.garden?.unlockedPlots);
 
-    if (farmingLevel >= 40 && gardenLevel < benchmarks.garden.levelForFarming50) {
+    if (farmingLevel >= 40 && gardenLevel !== undefined && gardenLevel < benchmarks.garden.levelForFarming50) {
       gaps.push({
         area: "farming",
         severity: farmingLevel >= 50 ? "high" : "medium",
@@ -500,7 +511,7 @@ function detectGaps(input: {
       });
     }
 
-    if (farmingLevel >= 50 && plots < benchmarks.garden.plotsUnlockedLate) {
+    if (farmingLevel >= 50 && plots !== undefined && plots < benchmarks.garden.plotsUnlockedLate) {
       gaps.push({
         area: "farming",
         severity: "medium",
@@ -553,10 +564,10 @@ function detectGaps(input: {
   }
 
   if (input.focus.includes("foraging")) {
-    const whispersSpent = asNumber(getPath(input.progression, ["hotf", "whispers", "spent"])) ?? 0;
-    const unlockedPerks = asNumber(getPath(input.progression, ["hotf", "unlockedPerks"])) ?? 0;
+    const whispersSpent = asNumber(getPath(input.progression, ["hotf", "whispers", "spent"]));
+    const unlockedPerks = asNumber(getPath(input.progression, ["hotf", "unlockedPerks"]));
 
-    if (whispersSpent < benchmarks.hotf.recommendedWhispersSpent) {
+    if (whispersSpent !== undefined && whispersSpent < benchmarks.hotf.recommendedWhispersSpent) {
       gaps.push({
         area: "foraging",
         severity: "low",
@@ -565,7 +576,7 @@ function detectGaps(input: {
       });
     }
 
-    if (unlockedPerks < benchmarks.hotf.recommendedPerks) {
+    if (unlockedPerks !== undefined && unlockedPerks < benchmarks.hotf.recommendedPerks) {
       gaps.push({
         area: "foraging",
         severity: "low",
@@ -582,7 +593,7 @@ function detectGaps(input: {
     const crimson = asNumber(getPath(input.member, ["essence", "CRIMSON", "current"])) ??
       asNumber(getPath(input.member, ["currencies", "essence", "CRIMSON", "current"]));
 
-    if ((dungeonSummary ?? 0) >= 35 && (wither ?? 0) < benchmarks.essence.witherForFiveStar / 10) {
+    if ((dungeonSummary ?? 0) >= 35 && wither !== undefined && wither < benchmarks.essence.witherForFiveStar / 10) {
       gaps.push({
         area: "dungeons",
         severity: "high",
@@ -591,7 +602,7 @@ function detectGaps(input: {
       });
     }
 
-    if ((dungeonSummary ?? 0) >= benchmarks.catacombs.masterModeEntry && (wither ?? 0) < benchmarks.essence.witherForFiveStar / 5) {
+    if ((dungeonSummary ?? 0) >= benchmarks.catacombs.masterModeEntry && wither !== undefined && wither < benchmarks.essence.witherForFiveStar / 5) {
       gaps.push({
         area: "dungeons",
         severity: "medium",
@@ -602,7 +613,7 @@ function detectGaps(input: {
 
     const kuudraTiers = asNumber(getPath(input.progression, ["crimsonIsle", "kuudraRunsCompleted"])) ??
       asNumber(getPath(input.progression, ["crimsonIsle", "kuudraTiersUnlocked"])) ?? 0;
-    if ((crimson ?? 0) < benchmarks.essence.crimsonForCrimsonGear && kuudraTiers > 0) {
+    if (crimson !== undefined && crimson < benchmarks.essence.crimsonForCrimsonGear && kuudraTiers > 0) {
       gaps.push({
         area: "dungeons",
         severity: "low",
@@ -624,12 +635,13 @@ function detectGaps(input: {
   if (input.focus.includes("slayers")) {
     const tiers = asRecord(input.progression?.slayerTiers);
     for (const [boss, value] of Object.entries(tiers ?? {})) {
-      const tier = asNumber(asRecord(value)?.tier) ?? 0;
+      const tier = asNumber(asRecord(value)?.tier);
+      if (tier === undefined) continue;
       if (boss === "blaze" && tier === 0) {
         gaps.push({
           area: "slayers",
           severity: "medium",
-          message: "Inferno Demonlord slayer has not been started.",
+          message: "No Inferno Demonlord slayer levels have been claimed.",
           evidence: { boss, tier }
         });
       }
@@ -638,7 +650,7 @@ function detectGaps(input: {
         gaps.push({
           area: "slayers",
           severity: "medium",
-          message: `Voidgloom tier ${tier} is behind other slayers.`,
+          message: `Voidgloom slayer level ${tier} is below the benchmark (${benchmarks.slayers.recommendedT5}).`,
           evidence: { boss, tier }
         });
       }
@@ -646,8 +658,8 @@ function detectGaps(input: {
   }
 
   if (input.focus.includes("combat")) {
-    const combatLevel = asNumber(input.skills?.combat?.level) ?? 0;
-    if (combatLevel < benchmarks.skills.recommendedForMidgame) {
+    const combatLevel = asNumber(input.skills?.combat?.level);
+    if (combatLevel !== undefined && combatLevel < benchmarks.skills.recommendedForMidgame) {
       gaps.push({
         area: "combat",
         severity: combatLevel < 30 ? "high" : "medium",
@@ -667,10 +679,10 @@ function detectGaps(input: {
   }
 
   if (input.focus.includes("pets")) {
-    const petScore = asNumber(getPath(input.progression, ["milestones", "highestPetScore"])) ?? 0;
+    const petScore = asNumber(getPath(input.progression, ["milestones", "highestPetScore"]));
     const activeLevel = asNumber(getPath(input.member, ["pets", "active", "level"])) ?? 0;
 
-    if (petScore < benchmarks.pets.recommendedScore) {
+    if (petScore !== undefined && petScore < benchmarks.pets.recommendedScore) {
       gaps.push({
         area: "pets",
         severity: petScore < 80 ? "medium" : "low",
@@ -691,8 +703,8 @@ function detectGaps(input: {
 
   if (input.focus.includes("skills")) {
     const enchanting = asNumber(input.skills?.enchanting?.level) ?? 0;
-    const mining = asNumber(input.skills?.mining?.level) ?? 0;
-    if (enchanting >= benchmarks.skills.recommendedForLategame && mining < benchmarks.skills.recommendedForMidgame) {
+    const mining = asNumber(input.skills?.mining?.level);
+    if (enchanting >= benchmarks.skills.recommendedForLategame && mining !== undefined && mining < benchmarks.skills.recommendedForMidgame) {
       gaps.push({
         area: "skills",
         severity: "low",
@@ -703,8 +715,8 @@ function detectGaps(input: {
   }
 
   if (input.focus.includes("money")) {
-    const purse = asNumber(input.member?.purse) ?? 0;
-    if (purse < 5_000_000) {
+    const purse = asNumber(input.member?.purse);
+    if (purse !== undefined && purse < 5_000_000) {
       gaps.push({
         area: "money",
         severity: purse < 1_000_000 ? "high" : "medium",
@@ -715,7 +727,7 @@ function detectGaps(input: {
   }
 
   const fairyCollected = asNumber(getPath(input.progression, ["fairySouls", "collected"]));
-  if (fairyCollected !== undefined && fairyCollected < benchmarks.fairySouls.total - 10) {
+  if (input.focus.includes("progression") && fairyCollected !== undefined && fairyCollected < benchmarks.fairySouls.total - 10) {
     gaps.push({
       area: "progression",
       severity: "low",
@@ -732,7 +744,7 @@ function sortGaps(gaps: AuditGap[]): AuditGap[] {
   return [...gaps].sort((left, right) => order[left.severity] - order[right.severity]);
 }
 
-function buildNextActions(gaps: AuditGap[], mayor: unknown, equipped: JsonObject | undefined): string[] {
+function buildNextActions(gaps: AuditGap[], mayor: unknown): string[] {
   const actions: string[] = [];
 
   for (const gap of gaps.slice(0, 5)) {
@@ -750,7 +762,7 @@ function buildNextActions(gaps: AuditGap[], mayor: unknown, equipped: JsonObject
         actions.push("Raise Combat level and upgrade combat gear/pets for slayers and Kuudra.");
         break;
       case "pets":
-        actions.push("Level high-tier pets to 100 and improve pet score with stones and skins.");
+        actions.push("Level relevant pets toward their reported level caps and review missing pet types and rarities.");
         break;
       case "mining":
         if ((asNumber(gap.evidence?.unplacedCrystals) ?? 0) > 0) {
@@ -762,7 +774,7 @@ function buildNextActions(gaps: AuditGap[], mayor: unknown, equipped: JsonObject
         }
         break;
       case "dungeons":
-        actions.push("Farm F7 for Wither essence and star up your Goldor/Necron pieces.");
+        actions.push("Review equipped gear's remaining essence and material costs, and check requirements before upgrading.");
         break;
       case "slayers":
         actions.push("Push lagging slayer tiers, especially Voidgloom and Blaze.");
@@ -776,17 +788,10 @@ function buildNextActions(gaps: AuditGap[], mayor: unknown, equipped: JsonObject
   }
 
   const mayorName = asString(getPath(mayor, ["active", "name"]));
-  const role = asString(equipped?.inferredRole);
-  if (mayorName === "Cole" && role === "mining") {
-    actions.push("Cole is mayor: prioritize powder mining, forge upgrades, and Mining Fiesta events.");
-  } else if (mayorName === "Aatrox") {
-    actions.push("Aatrox is mayor: capitalize on +25% Slayer XP to push lagging slayer bosses.");
-  } else if (mayorName === "Diana") {
-    actions.push("Diana is mayor: run Mythological Ritual / pet XP buffs to level pets faster.");
-  } else if (mayorName === "Derpy") {
-    actions.push("Derpy is mayor: sell NPC-priced items (2x) and grind mob/quest rewards while active.");
-  } else if (mayorName === "Jerry") {
-    actions.push("Jerry is mayor: watch Perkpocalypse rotations to time skill/slayer/mining grinds.");
+  const perkNames = (asArray(getPath(mayor, ["active", "perks"])) ?? [])
+    .map((perk) => asString(asRecord(perk)?.name)).filter((name): name is string => Boolean(name));
+  if (mayorName && perkNames.length) {
+    actions.push(`${mayorName} is mayor; plan around the reported active perks: ${perkNames.join(", ")}.`);
   }
 
   return [...new Set(actions)].slice(0, 6);

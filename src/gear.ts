@@ -67,6 +67,13 @@ function summarizeLoadout(loadout: LoadoutSummary): JsonObject {
 function inferArmorSet(ids: string[]): string | undefined {
   const joined = ids.join(" ").toUpperCase();
 
+  const witherSets: Record<string, string> = {
+    POWER_WITHER: "NECRON", WISE_WITHER: "STORM", TANK_WITHER: "GOLDOR", SPEED_WITHER: "MAXOR"
+  };
+  for (const [prefix, name] of Object.entries(witherSets)) {
+    if (ids.filter((id) => id.toUpperCase().startsWith(`${prefix}_`)).length >= 2) return name;
+  }
+
   for (const token of ["GOLDOR", "NECRON", "STORM", "MAXOR", "SHADOW_ASSASSIN", "FERMENTO", "SQUASH", "CROPIE", "DIVAN", "YOG", "GLACITE", "MELON", "FARM"]) {
     if (joined.includes(token)) {
       return token.replace(/_/g, " ");
@@ -103,8 +110,10 @@ export function summarizeEquippedGear(decodedInventories: DecodedInventory[] | u
     return undefined;
   }
 
-  const armor = decodedInventories.find((section) => section.path === "inventory.inv_armor");
-  const equipment = decodedInventories.find((section) => section.path === "inventory.equipment_contents");
+  const armor = decodedInventories.find((section) => !section.error && ["inventory.inv_armor", "inv_armor"].includes(section.path));
+  const equipment = decodedInventories.find((section) => !section.error && ["inventory.equipment_contents", "equipment_contents"].includes(section.path));
+
+  if (!armor && !equipment) return undefined;
 
   const armorIds = armor?.items.map((item) => asString(item.skyblockId) ?? "").join(" ") ?? "";
   const tool = findLikelyTool(decodedInventories);
@@ -119,7 +128,7 @@ export function summarizeEquippedGear(decodedInventories: DecodedInventory[] | u
 }
 
 function findLikelyTool(decodedInventories: DecodedInventory[]): DecodedInventoryItem | undefined {
-  const inventory = decodedInventories.find((section) => section.path === "inventory.inv_contents");
+  const inventory = decodedInventories.find((section) => !section.error && ["inventory.inv_contents", "inv_contents"].includes(section.path));
   if (!inventory) {
     return undefined;
   }
@@ -178,15 +187,15 @@ export function summarizeGearQuality(
 
   const ratings: JsonObject = {};
 
-  if ((skills.mining?.level ?? 0) >= 40) {
+  if (role === "mining" && armorSet && (skills.mining?.level ?? 0) >= 40) {
     ratings.mining = rateMiningGear(armorSet, equipped.tool as JsonObject | undefined);
   }
 
-  if ((skills.farming?.level ?? 0) >= 40) {
+  if (role === "farming" && armorSet && (skills.farming?.level ?? 0) >= 40) {
     ratings.farming = rateFarmingGear(armorSet);
   }
 
-  if ((skills.combat?.level ?? 0) >= 40) {
+  if (role === "dungeons" && armorSet && (skills.combat?.level ?? 0) >= 40) {
     ratings.combat = rateCombatGear(armorSet, equipped.armor as JsonObject[] | undefined);
     ratings.dungeons = rateDungeonGear(armorSet, equipped.armor as JsonObject[] | undefined);
   }
@@ -237,9 +246,7 @@ function rateDungeonGear(armorSet: string | undefined, armor: JsonObject[] | und
   const set = (armorSet ?? "").toUpperCase();
 
   if (set.includes("NECRON") || set.includes("STORM") || set.includes("GOLDOR") || set.includes("MAXOR")) {
-    const stars = (armor ?? [])
-      .map((piece) => asNumber(piece.dungeonStars))
-      .filter((value): value is number => value !== undefined);
+    const stars = (armor ?? []).map((piece) => asNumber(piece.dungeonStars) ?? 0);
     const average = stars.length ? stars.reduce((sum, value) => sum + value, 0) / stars.length : 0;
     return average >= 5 ? "strong" : "mid";
   }

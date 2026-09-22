@@ -13,6 +13,18 @@ function book(prices: Record<string, number>): PriceBook {
 }
 
 describe("item modifier valuation", () => {
+  it("reports unpriced stars when upgrade metadata is unavailable", () => {
+    const item: DecodedInventoryItem = { skyblockId: "HYPERION", dungeonStars: 7 };
+    const result = valueItemModifiers(item, book({ FIRST_MASTER_STAR: 100, SECOND_MASTER_STAR: 100 }), undefined);
+    expect(result.total).toBe(0);
+    expect(result.unpriced).toBeGreaterThan(0);
+  });
+
+  it("reports unpriced recombobulation when eligibility metadata is missing", () => {
+    const item: DecodedInventoryItem = { skyblockId: "SOME_ACCESSORY", rarityUpgrades: 1 };
+    expect(valueItemModifiers(item, book({ RECOMBOBULATOR_3000: 1000 }), undefined).unpriced).toBe(1);
+  });
+
   it("prices enchantments with per-enchant worth overrides and ignores SCAVENGER 5", () => {
     const item: DecodedInventoryItem = {
       skyblockId: "HYPERION",

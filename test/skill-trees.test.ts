@@ -45,7 +45,7 @@ describe("skill trees", () => {
       }
     };
 
-    expect(summarizeHotmTree(skillTree, { powder_mithril: 1000 })).toMatchObject({
+    expect(summarizeHotmTree(skillTree, { experience: 347_000, powder_mithril: 1000 })).toMatchObject({
       level: 7,
       selectedAbility: "pickobulus",
       unlockedPerks: 2,
@@ -104,5 +104,16 @@ describe("skill trees", () => {
     expect(hotm.crystals).toMatchObject({ jade_crystal: { state: "FOUND", totalFound: 3, totalPlaced: 1 } });
     // Non-record crystal entries are skipped.
     expect(hotm.crystals.amber_crystal).toBeUndefined();
+  });
+
+  it("derives HOTM from XP instead of the Core of the Mountain perk", () => {
+    expect(summarizeHotmTree({ nodes: { mining: { core_of_the_mountain: 2 } } }, { experience: 347_000 })).toMatchObject({ level: 7, coreOfTheMountainLevel: 2 });
+    expect(summarizeHotmTree({ nodes: { mining: { core_of_the_mountain: 7 } } }, undefined)?.level).toBeUndefined();
+    expect(summarizeHotmTree(undefined, { experience: 1_247_000 })?.level).toBe(10);
+  });
+
+  it("does not report zero unlocked nodes when the node data was not shared", () => {
+    expect(summarizeHotmTree(undefined, { powder_mithril: 0 })?.unlockedPerks).toBeUndefined();
+    expect(summarizeHotfTree(undefined, { forests_whispers: 0 })?.unlockedPerks).toBeUndefined();
   });
 });

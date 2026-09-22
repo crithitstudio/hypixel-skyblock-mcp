@@ -1,5 +1,7 @@
+import * as nbt from "prismarine-nbt";
 import { describe, expect, it } from "vitest";
-import { buildUpgradeAdvice } from "../src/upgrade-advisor.js";
+import { buildUpgradeAdvice, getUpgradeAdvisor } from "../src/upgrade-advisor.js";
+import type { HypixelClient } from "../src/hypixelClient.js";
 import type { UpgradeAdviceInputs } from "../src/upgrade-advisor.js";
 
 const ESSENCE_UPGRADES = {
@@ -42,6 +44,68 @@ function run(overrides: Partial<UpgradeAdviceInputs> = {}): {
 }
 
 describe("upgrade advisor", () => {
+  it("never treats a partial component subtotal as a budget-safe upgrade", () => {
+    const { upgrades, coverage } = run({
+      requestedSources: ["star"], budgetCoins: 35000,
+      essenceUpgrades: { perPiece: [{ skyblockId: "HYPERION", fromStar: 0, toStar: 5, estimatedCoins: 35000, pricingComplete: false, pricedSubtotalCoins: 35000, unpriced: ["ESSENCE_WITHER"] }] }
+    });
+    expect(upgrades[0]?.coinCost).toBeUndefined();
+    expect(upgrades[0]?.confidence).toBe("descriptive");
+    expect(coverage.pricedSources).toEqual([]);
+    expect(upgrades[0]).toMatchObject({ pricedSubtotalCoins: 35000, unpriced: ["ESSENCE_WITHER"] });
+  });
+
+  it("checks accessory ownership beyond the first 45 slots", async () => {
+    const ids = ["SPIDER_TALISMAN", ...Array.from({ length: 44 }, () => "OTHER_ACCESSORY"), "SPIDER_ARTIFACT"];
+    const data = nbt.writeUncompressed(nbt.comp({ i: nbt.list(nbt.comp(ids.map((id) => ({ id: nbt.string("stone"), Count: nbt.byte(1), tag: nbt.comp({ ExtraAttributes: nbt.comp({ id: nbt.string(id) }) }) })))) }) as never).toString("base64");
+    const client = {
+      hasApiKey: () => true,
+      hypixel: async () => ({ data: { profile: { profile_id: "b".repeat(32), members: { ["a".repeat(32)]: { inventory: { bag_contents: { talisman_bag: { data } } } } } } }, meta: {} })
+    } as unknown as HypixelClient;
+    const result = await getUpgradeAdvisor(client, { profileId: "b".repeat(32), sources: ["accessory"] });
+    expect(result.upgrades).toEqual([]);
+  });
+
+  it("combines every complete accessory section before suggesting upgrades", async () => {
+    const encode = (ids: string[]) => nbt.writeUncompressed(nbt.comp({ i: nbt.list(nbt.comp(ids.map((id) => ({
+      id: nbt.string("stone"),
+      Count: nbt.byte(1),
+      tag: nbt.comp({ ExtraAttributes: nbt.comp({ id: nbt.string(id) }) })
+    })))) }) as never).toString("base64");
+    const client = {
+      hasApiKey: () => true,
+      hypixel: async (path: string) => ({ data: path.endsWith("/profile")
+        ? { profile: { profile_id: "b".repeat(32), members: { ["a".repeat(32)]: { inventory: { bag_contents: {
+          talisman_bag: { data: encode(["SPIDER_TALISMAN"]) },
+          accessory_bag: { data: encode(["SPIDER_ARTIFACT"]) }
+        } } } } } }
+        : { products: {} }, meta: {} })
+    } as unknown as HypixelClient;
+    const result = await getUpgradeAdvisor(client, { profileId: "b".repeat(32), sources: ["accessory"] });
+    expect(result.upgrades).toEqual([]);
+    expect(result.inventoryWarnings).toBeUndefined();
+  });
+
+  it("withholds accessory advice when any accessory section is corrupt", async () => {
+    const valid = nbt.writeUncompressed(nbt.comp({ i: nbt.list(nbt.comp([{
+      id: nbt.string("stone"),
+      Count: nbt.byte(1),
+      tag: nbt.comp({ ExtraAttributes: nbt.comp({ id: nbt.string("SPIDER_TALISMAN") }) })
+    }])) }) as never).toString("base64");
+    const client = {
+      hasApiKey: () => true,
+      hypixel: async (path: string) => ({ data: path.endsWith("/profile")
+        ? { profile: { profile_id: "b".repeat(32), members: { ["a".repeat(32)]: { inventory: { bag_contents: {
+          talisman_bag: { data: valid },
+          accessory_bag: { data: "A".repeat(48) }
+        } } } } } }
+        : { products: {} }, meta: {} })
+    } as unknown as HypixelClient;
+    const result = await getUpgradeAdvisor(client, { profileId: "b".repeat(32), sources: ["accessory"] });
+    expect(result.upgrades).toEqual([]);
+    expect(result.inventoryWarnings).toEqual([expect.stringMatching(/could not be read completely/i)]);
+  });
+
   it("builds ranked star upgrades from essence data, cheapest first", () => {
     const { upgrades, coverage } = run({ requestedSources: ["star"], essenceUpgrades: ESSENCE_UPGRADES });
 

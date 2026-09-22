@@ -1,6 +1,6 @@
 import { HypixelApiError, McpUserError } from "./errors.js";
-import type { ApiResult, HypixelEnvelope, JsonObject, RateLimitInfo } from "./types.js";
-import { isRecord, parseEnvInteger, redactApiKey } from "./utils.js";
+import type { ApiResult, HypixelEnvelope, RateLimitInfo } from "./types.js";
+import { isRecord, redactApiKey } from "./utils.js";
 import { VERSION } from "./version.js";
 
 type CacheEntry = {
@@ -22,6 +22,13 @@ const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 // or buggy header cannot stall a request for minutes.
 const MAX_BACKOFF_MS = 30_000;
 
+function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === "string" && value.trim() ? Number(value) : value;
+  return typeof parsed === "number" && Number.isFinite(parsed)
+    ? Math.max(min, Math.min(max, Math.floor(parsed)))
+    : fallback;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -35,6 +42,8 @@ export class HypixelClient {
   private readonly maxRetries: number;
   private readonly maxCacheEntries: number;
   private readonly cache = new Map<string, CacheEntry>();
+  private readonly inFlight = new Map<string, Promise<ApiResult<unknown>>>();
+  private cacheGeneration = 0;
 
   constructor(options?: {
     apiBase?: string;
@@ -48,10 +57,10 @@ export class HypixelClient {
     this.apiBase = (options?.apiBase ?? process.env.HYPIXEL_API_BASE ?? "https://api.hypixel.net").replace(/\/$/, "");
     this.mojangBase = (options?.mojangBase ?? process.env.MOJANG_API_BASE ?? "https://api.mojang.com").replace(/\/$/, "");
     this.apiKey = options?.apiKey ?? process.env.HYPIXEL_API_KEY ?? process.env.HYPIXEL_API_TOKEN;
-    this.defaultTtlMs = options?.defaultTtlMs ?? parseEnvInteger("HYPIXEL_CACHE_TTL_MS", 60_000);
-    this.timeoutMs = options?.timeoutMs ?? parseEnvInteger("HYPIXEL_REQUEST_TIMEOUT_MS", 15_000);
-    this.maxRetries = Math.max(0, options?.maxRetries ?? parseEnvInteger("HYPIXEL_MAX_RETRIES", 2));
-    this.maxCacheEntries = Math.max(1, options?.maxCacheEntries ?? parseEnvInteger("HYPIXEL_CACHE_MAX_ENTRIES", 500));
+    this.defaultTtlMs = boundedInteger(options?.defaultTtlMs ?? process.env.HYPIXEL_CACHE_TTL_MS, 60_000, 0, 86_400_000);
+    this.timeoutMs = boundedInteger(options?.timeoutMs ?? process.env.HYPIXEL_REQUEST_TIMEOUT_MS, 15_000, 1, 120_000);
+    this.maxRetries = boundedInteger(options?.maxRetries ?? process.env.HYPIXEL_MAX_RETRIES, 2, 0, 5);
+    this.maxCacheEntries = boundedInteger(options?.maxCacheEntries ?? process.env.HYPIXEL_CACHE_MAX_ENTRIES, 500, 1, 5_000);
   }
 
   hasApiKey(): boolean {
@@ -79,24 +88,33 @@ export class HypixelClient {
       headers["API-Key"] = this.apiKey;
     }
 
-    const result = await this.fetchJson<T>(url, headers, options?.ttlMs);
-    if (result.data.success === false) {
-      const cause = typeof result.data.cause === "string" ? result.data.cause : "Hypixel API returned success=false";
-      throw new HypixelApiError(cause, 200, { rateLimit: result.meta.rateLimit, body: result.data });
-    }
-
-    return result;
+    return this.fetchJson<T>(url, headers, options?.ttlMs, (result) => {
+      if (isRecord(result.data) && result.data.success === false) {
+        const cause = typeof result.data.cause === "string" ? result.data.cause : "Hypixel API returned success=false";
+        throw new HypixelApiError(cause, 200, { rateLimit: result.meta.rateLimit, body: result.data });
+      }
+      if (!isRecord(result.data) || result.data.success !== true) {
+        throw new HypixelApiError("Invalid Hypixel response: expected an object with success=true.", 200);
+      }
+    });
   }
 
   async mojangProfile(username: string, ttlMs = 24 * 60 * 60 * 1000): Promise<ApiResult<{ id: string; name: string }>> {
     const encodedName = encodeURIComponent(username);
     const url = `${this.mojangBase}/users/profiles/minecraft/${encodedName}`;
-    return this.fetchJson<{ id: string; name: string }>(url, { Accept: "application/json" }, ttlMs);
+    return this.fetchJson<{ id: string; name: string }>(url, { Accept: "application/json" }, ttlMs, ({ data }) => {
+      if (!isRecord(data) || typeof data.id !== "string" || !/^[0-9a-f]{32}$/i.test(data.id) ||
+          typeof data.name !== "string" || !data.name.trim()) {
+        throw new HypixelApiError("Invalid Mojang profile response: expected a Minecraft UUID and username.", 200);
+      }
+    });
   }
 
   clearCache(): number {
     const cleared = this.cache.size;
+    this.cacheGeneration += 1;
     this.cache.clear();
+    this.inFlight.clear();
     return cleared;
   }
 
@@ -116,39 +134,57 @@ export class HypixelClient {
     return url.toString();
   }
 
-  private async fetchJson<T>(url: string, headers: HeadersInit, ttlMs = this.defaultTtlMs): Promise<ApiResult<T>> {
+  private async fetchJson<T>(
+    url: string,
+    headers: HeadersInit,
+    ttlMs = this.defaultTtlMs,
+    validate?: (result: ApiResult<T>) => void
+  ): Promise<ApiResult<T>> {
+    const effectiveTtl = boundedInteger(ttlMs, this.defaultTtlMs, 0, 86_400_000);
     const cacheKey = `${url}|${JSON.stringify(headers)}`;
-    const cached = this.cache.get(cacheKey);
+    const cached = effectiveTtl > 0 ? this.cache.get(cacheKey) : undefined;
 
     if (cached) {
       if (cached.expiresAt > Date.now()) {
-        return {
-          data: cached.value.data as T,
-          meta: {
-            ...cached.value.meta,
-            cached: true
-          }
-        };
+        const result = structuredClone(cached.value) as ApiResult<T>;
+        result.meta.cached = true;
+        return result;
       }
       // Expired: drop it so the cache does not accumulate stale entries.
       this.cache.delete(cacheKey);
     }
 
-    let lastError: unknown;
+    const requestKey = `${cacheKey}|${effectiveTtl}`;
+    const existing = this.inFlight.get(requestKey);
+    if (existing) return structuredClone(await existing) as ApiResult<T>;
+
+    const generation = this.cacheGeneration;
+    const pending = this.fetchWithRetries<T>(url, headers, validate).then((result) => {
+      if (effectiveTtl > 0 && generation === this.cacheGeneration) {
+        this.storeInCache(cacheKey, { expiresAt: Date.now() + effectiveTtl, value: result });
+      }
+      return result;
+    });
+    this.inFlight.set(requestKey, pending);
+    try {
+      // Cache and coalesced callers each receive independent snapshots.
+      return structuredClone(await pending);
+    } finally {
+      if (this.inFlight.get(requestKey) === pending) this.inFlight.delete(requestKey);
+    }
+  }
+
+  private async fetchWithRetries<T>(
+    url: string,
+    headers: HeadersInit,
+    validate?: (result: ApiResult<T>) => void
+  ): Promise<ApiResult<T>> {
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       try {
         const result = await this.fetchAttempt<T>(url, headers);
-
-        if (ttlMs > 0) {
-          this.storeInCache(cacheKey, {
-            expiresAt: Date.now() + ttlMs,
-            value: result as ApiResult<unknown>
-          });
-        }
-
+        validate?.(result);
         return result;
       } catch (error) {
-        lastError = error;
         if (attempt >= this.maxRetries || !this.isRetryable(error)) {
           throw error;
         }
@@ -157,7 +193,7 @@ export class HypixelClient {
     }
 
     // Unreachable: the loop either returns or throws, but satisfies the type checker.
-    throw lastError;
+    throw new Error("Request retry loop exhausted unexpectedly.");
   }
 
   private async fetchAttempt<T>(url: string, headers: HeadersInit): Promise<ApiResult<T>> {
@@ -171,10 +207,19 @@ export class HypixelClient {
       });
       const rateLimit = this.rateLimitFromHeaders(response.headers);
       const text = await response.text();
-      const parsed = text ? (JSON.parse(text) as unknown) : null;
+      let parsed: unknown;
+      try {
+        parsed = text ? JSON.parse(text) : null;
+      } catch {
+        if (response.ok) {
+          throw new HypixelApiError("Upstream returned invalid JSON. The endpoint may be blocked or temporarily unavailable.", response.status);
+        }
+        // Gateway/CDN errors often contain HTML. Preserve their HTTP status and
+        // retry headers even when there is no JSON error envelope.
+      }
 
       if (!response.ok) {
-        const cause = isRecord(parsed) && typeof parsed.cause === "string" ? parsed.cause : response.statusText;
+        const cause = isRecord(parsed) && typeof parsed.cause === "string" ? parsed.cause : response.statusText || `Upstream HTTP ${response.status}`;
         throw new HypixelApiError(cause, response.status, { rateLimit, body: parsed });
       }
 
@@ -208,7 +253,7 @@ export class HypixelClient {
     }
     // A non-HTTP error here is a network/DNS failure (fetch threw a TypeError);
     // those are transient and worth one more attempt.
-    return error instanceof Error && error.name !== "McpUserError";
+    return error instanceof TypeError;
   }
 
   /**
@@ -246,7 +291,13 @@ export class HypixelClient {
     const remaining = this.headerNumber(headers, "RateLimit-Remaining");
     // Standard Retry-After (RFC 9110, delta-seconds form) is the fallback when
     // Hypixel sends it on a 429 instead of the RateLimit-Reset header.
-    const resetSeconds = this.headerNumber(headers, "RateLimit-Reset") ?? this.headerNumber(headers, "Retry-After");
+    const retryAfter = headers.get("Retry-After");
+    const retryDate = retryAfter && !/^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Date.parse(retryAfter) : NaN;
+    const retrySeconds = Number.isFinite(retryDate)
+      ? Math.max(0, Math.ceil((retryDate - Date.now()) / 1000))
+      : this.headerNumber(headers, "Retry-After");
+    const reset = this.headerNumber(headers, "RateLimit-Reset");
+    const resetSeconds = reset === undefined ? retrySeconds : retrySeconds === undefined ? reset : Math.max(reset, retrySeconds);
 
     if (limit === undefined && remaining === undefined && resetSeconds === undefined) {
       return undefined;
@@ -261,7 +312,7 @@ export class HypixelClient {
       return undefined;
     }
 
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
   }
 }

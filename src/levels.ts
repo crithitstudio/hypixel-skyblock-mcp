@@ -170,9 +170,9 @@ function stepCost(index: number): number {
   return PET_LEVELS[Math.min(index, PET_LEVELS.length - 1)] ?? PET_LEVELS[PET_LEVELS.length - 1]!;
 }
 
-export function slayerTierFromRecord(claimedLevels: Record<string, unknown> | undefined): number {
+export function slayerTierFromRecord(claimedLevels: Record<string, unknown> | undefined): number | undefined {
   if (!claimedLevels) {
-    return 0;
+    return undefined;
   }
 
   let tier = 0;

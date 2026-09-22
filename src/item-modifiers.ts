@@ -169,11 +169,15 @@ export function valueItemModifiers(
     } else {
       unpriced += 1;
     }
+  } else if ((item.rarityUpgrades ?? 0) > 0 && !meta?.category) {
+    // Eligibility cannot be established when the optional item metadata failed.
+    unpriced += 1;
   }
 
   // --- Essence stars + Master stars (from the official upgrade_costs table) ---
   const level = item.dungeonStars ?? 0;
   const upgradeCosts = meta?.upgradeCosts;
+  if (level > 0 && !upgradeCosts?.length) unpriced += 1;
   if (level > 0 && upgradeCosts?.length) {
     for (const starCosts of upgradeCosts.slice(0, level)) {
       for (const cost of starCosts) {

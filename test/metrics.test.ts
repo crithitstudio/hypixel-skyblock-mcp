@@ -31,6 +31,15 @@ describe("skill average", () => {
 });
 
 describe("slayer totals", () => {
+  it("does not zero-fill unknown boss XP or levels into complete totals", () => {
+    const totals = summarizeSlayerTotals({ blaze: { xp: 100_000 }, enderman: { tier: 5 }, zombie: { xp: 0, tier: 0 } });
+    expect(totals?.totalXp).toBeUndefined();
+    expect(totals?.totalSlayerLevels).toBeUndefined();
+    expect(totals?.missingXpBosses).toEqual(["enderman"]);
+    expect(totals?.missingLevelBosses).toEqual(["blaze"]);
+    expect(totals?.perBoss).toEqual({ blaze: { xp: 100_000 }, enderman: { level: 5 }, zombie: { xp: 0, level: 0 } });
+  });
+
   it("sums slayer xp and levels across bosses", () => {
     const totals = summarizeSlayerTotals({
       zombie: { xp: 1_000_000, tier: 9 },

@@ -1,14 +1,14 @@
 import type { HypixelClient } from "./hypixelClient.js";
 import { valueItemModifiers } from "./item-modifiers.js";
 import type { ItemMeta } from "./item-modifiers.js";
-import { decodeInventoriesFromMember } from "./nbt.js";
+import { decodeInventoriesFromMember, filterNbtDataLocations, findNbtDataLocations } from "./nbt.js";
 import type { InventorySectionQuery } from "./nbt.js";
 import { buildPriceBook, priceFor } from "./pricing.js";
 import type { PriceBasis, PriceBook } from "./pricing.js";
 import { loadProfileMember, summarizeProfile } from "./skyblock.js";
 import { extractSacksCounts } from "./storage.js";
-import type { DecodedInventory, JsonObject } from "./types.js";
-import { asArray, asNumber, asRecord, compactObject, freshnessFromMeta, freshnessFromTimestamp, getPath } from "./utils.js";
+import type { DecodedInventoryItem, JsonObject } from "./types.js";
+import { asArray, asNumber, asRecord, compactObject, freshnessFromMeta, getPath } from "./utils.js";
 import { NETWORTH_CAVEATS } from "./caveats.js";
 
 // Holdings worth pricing. "loadout" is excluded to avoid double counting saved
@@ -32,7 +32,7 @@ const DISCLAIMER =
   "Estimate. Base item value is the SkyBlock-ID market price; on top of that, modifier value is added for " +
   "enchantments, hot potato/fuming books, recombobulators, essence/master stars, gemstones, and reforge stones, " +
   "valued at SkyHelper-Networth 'application worth' fractions of live Bazaar prices. Gemstones and reforge stones " +
-  "are valued at full Bazaar price; gemstone slot-unlock costs and pet levels are still excluded. " +
+  "are valued at full Bazaar price. Pets, museum holdings, auction/Bazaar escrow, and gemstone slot-unlock costs are excluded. " +
   "Modifier value is only added to items that have a base price, so auction-only gear (no Bazaar base price) is " +
   "still undervalued unless an external lowest-BIN source (SKYBLOCK_LOWEST_BIN_URL) is configured.";
 
@@ -59,6 +59,7 @@ type ItemValue = {
   unitPrice: number;
   value: number;
   modifierValue?: number;
+  priceId?: string;
 };
 
 export async function getSkyblockNetworth(client: HypixelClient, options: NetworthOptions): Promise<JsonObject> {
@@ -86,6 +87,15 @@ export async function getSkyblockNetworth(client: HypixelClient, options: Networ
     maxLoreLines: 0
   };
   const decoded = await decodeInventoriesFromMember(member, query);
+  const sectionCount = filterNbtDataLocations(findNbtDataLocations(member), query).length;
+  const sectionErrors = decoded.filter((section) => section.error).map((section) => ({ path: section.path, error: section.error }));
+  const truncatedSections = decoded.filter((section) => section.truncated).length;
+  const omittedSections = Math.max(0, sectionCount - decoded.length);
+  const inventoryAvailable = decoded.length > 0;
+  const missingData: string[] = [];
+  if (!inventoryAvailable) missingData.push("Inventory data is missing or private.");
+  if (sectionErrors.length) missingData.push("Some inventory sections could not be decoded; their holdings are excluded.");
+  if (truncatedSections || omittedSections) missingData.push("Some inventory holdings were omitted by decode limits.");
 
   const includeModifiers = options.includeModifiers !== false;
   const itemMetaMap = includeModifiers ? await buildItemMetaMap(client) : undefined;
@@ -98,18 +108,31 @@ export async function getSkyblockNetworth(client: HypixelClient, options: Networ
   let pricedStacks = 0;
   let totalStacks = 0;
   const unpriced = new Map<string, { skyblockId: string; name?: string; count: number }>();
+  const seenItemUuids = new Set<string>();
+  let duplicateItemStacks = 0;
+  let unidentifiedItemStacks = 0;
 
-  for (const section of decoded as DecodedInventory[]) {
+  for (const section of decoded) {
     const sectionType = section.sectionType ?? "unknown";
     for (const item of section.items) {
+      const itemUuid = item.itemUuid?.replace(/-/g, "").toLowerCase();
+      if (itemUuid) {
+        if (seenItemUuids.has(itemUuid)) {
+          duplicateItemStacks += 1;
+          continue;
+        }
+        seenItemUuids.add(itemUuid);
+      }
       const skyblockId = item.skyblockId;
       if (!skyblockId) {
+        unidentifiedItemStacks += 1;
         continue;
       }
 
       totalStacks += 1;
       const count = item.count ?? 1;
-      const unitPrice = priceFor(priceBook, skyblockId);
+      const priceId = marketItemId(item);
+      const unitPrice = priceFor(priceBook, priceId);
 
       if (unitPrice === undefined) {
         const key = skyblockId.toUpperCase();
@@ -123,11 +146,11 @@ export async function getSkyblockNetworth(client: HypixelClient, options: Networ
       }
 
       pricedStacks += 1;
-      const key = skyblockId.toUpperCase();
+      const key = priceId!.toUpperCase();
 
       let modifierValue = 0;
-      if (includeModifiers) {
-        const mod = valueItemModifiers(item, priceBook, itemMetaMap?.get(key));
+      if (includeModifiers && skyblockId.toUpperCase() !== "ENCHANTED_BOOK") {
+        const mod = valueItemModifiers(item, priceBook, itemMetaMap?.get(skyblockId.toUpperCase()));
         modifierValue = mod.total;
         modifiersTotal += mod.total;
         modifierUnpriced += mod.unpriced;
@@ -145,7 +168,7 @@ export async function getSkyblockNetworth(client: HypixelClient, options: Networ
         existing.value += value;
         existing.modifierValue = (existing.modifierValue ?? 0) + modifierValue;
       } else {
-        itemIndex.set(key, { skyblockId, name: item.name, count, unitPrice, value, modifierValue: modifierValue || undefined });
+        itemIndex.set(key, { skyblockId, priceId: priceId !== skyblockId ? priceId : undefined, name: item.name, count, unitPrice, value, modifierValue: modifierValue || undefined });
       }
     }
   }
@@ -154,6 +177,9 @@ export async function getSkyblockNetworth(client: HypixelClient, options: Networ
   const sacks = options.includeSacks === false ? undefined : valueSacks(member, priceBook);
   const purse = asNumber(getPath(member, ["currencies", "coin_purse"])) ?? asNumber(member.coin_purse);
   const bank = asNumber(getPath(profile, ["banking", "balance"]));
+  if (purse === undefined) missingData.push("Purse balance is missing or private.");
+  if (bank === undefined) missingData.push("Shared bank balance is missing or private.");
+  if (options.includeSacks !== false && !extractSacksCounts(member)) missingData.push("Sack counts are missing or private.");
   const liquid = (purse ?? 0) + (bank ?? 0);
 
   const total = liquid + itemsValue + (asNumber(sacks?.total) ?? 0);
@@ -170,14 +196,18 @@ export async function getSkyblockNetworth(client: HypixelClient, options: Networ
       selectedMemberUuid: memberUuid,
       hasApiKey: client.hasApiKey()
     },
-    freshness: freshnessFromMeta(profileResult.meta, 60, "Profile data freshness. See networth.priceFreshness for how current the backing prices are."),
+    freshness: freshnessFromMeta(profileResult.meta, 60, "Profile retrieval freshness. See networth.priceSourceFreshness for the age of each price source."),
     caveats: NETWORTH_CAVEATS,
+    privacy: missingData,
     profile: summarizeProfile(profile),
     networth: compactObject({
       total: round(total),
       priceBasis: priceBook.basis,
       priceSources: priceBook.sources,
-      priceFreshness: freshnessFromTimestamp(priceBook.pricedAt, priceBook.pricedFromCache ?? false, 60),
+      priceFreshness: priceBook.sourceFreshness?.bazaar,
+      priceSourceFreshness: priceBook.sourceFreshness,
+      priceSourceStatus: priceBook.sourceStatus,
+      warnings: priceBook.warnings,
       liquid: compactObject({ purse: round(purse), bank: round(bank), total: round(liquid) }),
       items: compactObject({
         total: round(itemsValue),
@@ -193,6 +223,18 @@ export async function getSkyblockNetworth(client: HypixelClient, options: Networ
       }),
       sacks,
       coverage: compactObject({
+        complete: missingData.length === 0 && totalStacks === pricedStacks && modifierUnpriced === 0 && unidentifiedItemStacks === 0 && (asNumber(sacks?.unpricedKinds) ?? 0) === 0,
+        scope: "Coverage of supported inventory sections, sacks, purse and shared bank only; excluded categories are not included in this measure.",
+        excludedCategories: ["pets", "museum", "auction_escrow", "bazaar_escrow", "gemstone_slot_unlock_costs"],
+        inventoryAvailable,
+        decodedSections: decoded.length,
+        failedSections: sectionErrors.length,
+        sectionErrors,
+        truncatedSections,
+        omittedSections,
+        missingData,
+        duplicateItemStacks,
+        unidentifiedItemStacks,
         pricedItemStacks: pricedStacks,
         totalItemStacks: totalStacks,
         unpricedItemStacks: totalStacks - pricedStacks,
@@ -204,6 +246,15 @@ export async function getSkyblockNetworth(client: HypixelClient, options: Networ
       disclaimer: DISCLAIMER
     })
   });
+}
+
+/** Standalone books have variant Bazaar IDs; their enchantment is not an applied modifier. */
+function marketItemId(item: DecodedInventoryItem): string | undefined {
+  if (item.skyblockId?.toUpperCase() !== "ENCHANTED_BOOK") return item.skyblockId;
+  const enchantments = Object.entries(item.enchantments ?? {});
+  if (enchantments.length !== 1) return undefined;
+  const [name, level] = enchantments[0]!;
+  return Number.isInteger(level) && level > 0 ? `ENCHANTMENT_${name.toUpperCase()}_${level}` : undefined;
 }
 
 // Builds a SkyBlock-ID -> {category, upgradeCosts} map from the official items
@@ -240,16 +291,20 @@ function valueSacks(member: JsonObject, priceBook: PriceBook): JsonObject | unde
 
   let total = 0;
   let pricedKinds = 0;
+  let totalKinds = 0;
   const valued: ItemValue[] = [];
+  const unpricedItems: { skyblockId: string; count: number }[] = [];
 
   for (const [id, rawCount] of Object.entries(counts)) {
     const count = asNumber(rawCount) ?? 0;
     if (count <= 0) {
       continue;
     }
+    totalKinds += 1;
 
     const unitPrice = priceFor(priceBook, id);
     if (unitPrice === undefined) {
+      unpricedItems.push({ skyblockId: id, count });
       continue;
     }
 
@@ -259,13 +314,13 @@ function valueSacks(member: JsonObject, priceBook: PriceBook): JsonObject | unde
     valued.push({ skyblockId: id, count, unitPrice, value });
   }
 
-  if (!valued.length) {
-    return undefined;
-  }
-
   return compactObject({
     total: round(total),
+    totalKinds,
     pricedKinds,
+    unpricedKinds: unpricedItems.length,
+    pricingComplete: unpricedItems.length === 0,
+    unpricedItems,
     topValued: valued
       .sort((left, right) => right.value - left.value)
       .slice(0, 15)

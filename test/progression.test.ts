@@ -5,7 +5,7 @@ describe("progression summaries", () => {
   it("includes HOTM/HOTF trees and structured essence", () => {
     const member = {
       leveling: { experience: 17907, highest_pet_score: 99 },
-      mining_core: { powder_mithril: 100, powder_gemstone: 50 },
+      mining_core: { experience: 347_000, powder_mithril: 100, powder_gemstone: 50 },
       foraging_core: { forests_whispers: 10, forests_whispers_spent: 5000 },
       skill_tree: {
         nodes: {
@@ -83,7 +83,7 @@ describe("progression summaries", () => {
     expect(progression.skyblockLevel).toMatchObject({ level: 100 });
     expect(progression.fairySouls).toMatchObject({ collected: 200, unspent: 5, totalAvailable: 273 });
     expect(progression.garden).toMatchObject({ level: { level: 10 }, copper: 9000 });
-    expect(progression.minions).toMatchObject({ craftedSlots: 2, unlockedTypes: 3 });
+    expect(progression.minions).toMatchObject({ craftedVariants: 2, unlockedTypes: 3 });
     expect(progression.bestiary).toMatchObject({ trackedMobs: 2, totalKills: 150, milestonesClaimed: 2 });
     expect(progression.milestones).toMatchObject({ nucleusRuns: 12, highestPetScore: 150, completedTaskCount: 3 });
     expect(progression.slayerTiers).toMatchObject({ zombie: { tier: 7, xp: 1_000_000 } });
@@ -120,5 +120,20 @@ describe("progression summaries", () => {
     });
     expect(summarizeMuseumMember(museum, "missing")).toBeUndefined();
     expect(summarizeMuseumMember(undefined, "uuid-1")).toBeUndefined();
+  });
+
+  it("counts museum item maps without pretending that absent item data is empty", () => {
+    expect(summarizeMuseumMember({ data: { members: { abc: { items: { HYPERION: { donated_time: 1 }, DIVAN_HELMET: { donated_time: 2 } }, special: [{ donated_time: 3 }] } } } }, "abc")).toMatchObject({ itemCount: 2, specialItemCount: 1 });
+    expect(summarizeMuseumMember({ data: { members: { abc: { value: 99 } } } }, "abc")?.itemCount).toBeUndefined();
+  });
+
+  it("reads actual Crimson Isle reputation fields", () => {
+    expect(summarizeProgression({ nether_island_player_data: { mages_reputation: 100, barbarians_reputation: -50 } }).crimsonIsle).toMatchObject({ magesReputation: 100, barbariansReputation: -50 });
+  });
+
+  it("reads crafted minion variants from modern member fields without calling them slots", () => {
+    const result = summarizeProgression({ player_data: { crafted_generators: ["COBBLESTONE_1", "COBBLESTONE_2", "COAL_1"] } });
+    expect(result.minions).toMatchObject({ craftedVariants: 3, craftedTypes: 2 });
+    expect((result.minions as Record<string, unknown>).craftedSlots).toBeUndefined();
   });
 });

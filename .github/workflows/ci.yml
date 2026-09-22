@@ -22,3 +22,4 @@ jobs:
       - run: npm run build
       # Runs the test suite and enforces the coverage thresholds in vitest.config.ts.
       - run: npm run coverage
+      - run: npm run smoke

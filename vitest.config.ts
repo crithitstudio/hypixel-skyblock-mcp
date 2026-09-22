@@ -1,10 +1,8 @@
 import { defineConfig } from "vitest/config";
 
-// The coverage gate is scoped to the deterministic, pure-logic modules. The
-// network/orchestration layer (server, hypixelClient, skyblock, audit,
-// networth, pricing, gear, accessories) talks to the live Hypixel API and is
-// exercised by manual/integration checks rather than unit tests, so it is
-// intentionally excluded from the coverage thresholds.
+// Gate core data logic and the mocked network/pricing layers. Profile/audit
+// orchestration and MCP wiring also have integration tests; the compiled stdio
+// entry point is exercised by `npm run smoke` outside Vitest instrumentation.
 const COVERAGE_INCLUDE = [
   "src/levels.ts",
   "src/metrics.ts",
@@ -17,7 +15,14 @@ const COVERAGE_INCLUDE = [
   "src/progression.ts",
   "src/nbt.ts",
   "src/utils.ts",
-  "src/caveats.ts"
+  "src/caveats.ts",
+  "src/hypixelClient.ts",
+  "src/wiki.ts",
+  "src/pricing.ts",
+  "src/networth.ts",
+  "src/upgrade-advisor.ts",
+  "src/profile-summaries.ts",
+  "src/mcp.ts"
 ];
 
 export default defineConfig({

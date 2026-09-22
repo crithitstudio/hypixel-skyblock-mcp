@@ -124,17 +124,23 @@ export async function lookupItem(client: HypixelClient, options: ItemLookupOptio
 
   const { id, record } = resolved.item;
 
+  const warnings: string[] = [];
   const bazaar = await getBazaar(client, {
     productIds: [id],
     includeOrders: Boolean(options.includeBazaarOrders),
     limit: 1
+  }).catch(() => {
+    warnings.push("Bazaar prices are unavailable; item metadata remains available.");
+    return undefined;
   });
-  const bazaarProduct = asArray(bazaar.products)?.[0] as JsonObject | undefined;
+  const bazaarProduct = asArray(bazaar?.products)?.[0] as JsonObject | undefined;
 
   let value: JsonObject;
   let priceFreshness: unknown;
+  let sourceStatus: unknown;
   if (bazaarProduct) {
-    priceFreshness = bazaar.freshness;
+    priceFreshness = bazaar?.freshness;
+    sourceStatus = { bazaar: "available" };
     value = compactObject({
       source: "bazaar",
       buyPrice: bazaarProduct.buyPrice,
@@ -152,17 +158,27 @@ export async function lookupItem(client: HypixelClient, options: ItemLookupOptio
     const basis: PriceBasis = options.priceBasis ?? "buy";
     const priceBook = await buildPriceBook(client, { basis, includeAuctionPrices: true });
     const lowbin = priceFor(priceBook, id);
-    if (lowbin !== undefined && priceBook.sources.includes("lowest_bin")) {
+    const source = priceBook.sourceByItem?.get(id.toUpperCase());
+    sourceStatus = priceBook.sourceStatus;
+    warnings.push(...(priceBook.warnings ?? []));
+    if (lowbin !== undefined && source) {
+      priceFreshness = priceBook.sourceFreshness?.[source];
       value = compactObject({
-        source: "lowest_bin",
+        source,
         price: lowbin,
         basis,
-        note: "Price from the configured external lowest-BIN source (SKYBLOCK_LOWEST_BIN_URL), not the Bazaar."
+        note: source === "lowest_bin"
+          ? "Price from the configured external lowest-BIN source (SKYBLOCK_LOWEST_BIN_URL)."
+          : "Bazaar price became available on retry."
       });
     } else {
       value = {
         source: "none",
-        note: "Auction-only item not on the Bazaar, and no lowest-BIN source is configured. Use skyblock_auctions for live BIN/auction listings, or set SKYBLOCK_LOWEST_BIN_URL."
+        note: priceBook.sourceStatus?.lowest_bin === "not_configured"
+          ? "No live price is available and no lowest-BIN source is configured. Use skyblock_auctions for listings, or set SKYBLOCK_LOWEST_BIN_URL."
+          : priceBook.sourceStatus?.lowest_bin === "unavailable"
+            ? "The configured lowest-BIN source is unavailable. No live price can be established; try again or use skyblock_auctions."
+            : "The item has no price in the available market sources. Use skyblock_auctions to check listings."
       };
     }
   }
@@ -173,7 +189,8 @@ export async function lookupItem(client: HypixelClient, options: ItemLookupOptio
         { id, name: asString(item.name) },
         { maxSectionChars: options.maxWikiSectionChars }
       ).catch((error) => ({
-        source: "official_hypixel_skyblock_wiki",
+        source: "configured_mediawiki",
+        official: false,
         error: error instanceof Error ? error.message : String(error)
       }))
     : undefined;
@@ -186,6 +203,8 @@ export async function lookupItem(client: HypixelClient, options: ItemLookupOptio
       "This timestamp covers cached item metadata (tier/stats), not the price. See priceFreshness for how current the value is."
     ),
     priceFreshness,
+    sourceStatus,
+    warnings: [...new Set(warnings)],
     caveats: ITEM_VALUE_CAVEATS,
     found: true,
     item,

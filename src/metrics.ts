@@ -74,6 +74,8 @@ export function summarizeSlayerTotals(slayers: JsonObject | undefined): JsonObje
   let totalXp = 0;
   let totalLevels = 0;
   const perBoss: JsonObject = {};
+  const missingXpBosses: string[] = [];
+  const missingLevelBosses: string[] = [];
 
   for (const [boss, value] of Object.entries(slayers)) {
     const record = asRecord(value);
@@ -81,10 +83,12 @@ export function summarizeSlayerTotals(slayers: JsonObject | undefined): JsonObje
       continue;
     }
 
-    const xp = asNumber(record.xp) ?? 0;
-    const level = asNumber(record.tier) ?? 0;
-    totalXp += xp;
-    totalLevels += level;
+    const xp = asNumber(record.xp);
+    const level = asNumber(record.tier);
+    if (xp === undefined) missingXpBosses.push(boss);
+    else totalXp += xp;
+    if (level === undefined) missingLevelBosses.push(boss);
+    else totalLevels += level;
     perBoss[boss] = compactObject({ xp, level });
   }
 
@@ -93,8 +97,10 @@ export function summarizeSlayerTotals(slayers: JsonObject | undefined): JsonObje
   }
 
   return compactObject({
-    totalXp,
-    totalSlayerLevels: totalLevels,
+    totalXp: missingXpBosses.length ? undefined : totalXp,
+    totalSlayerLevels: missingLevelBosses.length ? undefined : totalLevels,
+    missingXpBosses,
+    missingLevelBosses,
     perBoss
   });
 }

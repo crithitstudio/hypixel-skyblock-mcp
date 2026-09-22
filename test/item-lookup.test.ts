@@ -47,6 +47,30 @@ function wikiResponse(body: unknown): Response {
 describe("item lookup", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("returns item metadata and lowest-BIN price when Bazaar is unavailable", async () => {
+    vi.stubEnv("SKYBLOCK_LOWEST_BIN_URL", "https://prices.test/map");
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ HYPERION: 1234 })));
+    const client = { hypixel: async (path: string) => {
+      if (path.includes("/resources/")) return { data: { items: ITEMS }, meta: {} };
+      throw new Error("Bazaar temporarily unavailable");
+    } } as unknown as HypixelClient;
+    const result = await lookupItem(client, { itemId: "HYPERION" });
+    expect(result.found).toBe(true);
+    expect(result.value).toMatchObject({ source: "lowest_bin", price: 1234 });
+    expect(result.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/bazaar/i)]));
+    expect(result.priceFreshness).toMatchObject({ dataAgeSeconds: null });
+  });
+
+  it("distinguishes a failed configured lowest-BIN source from an unconfigured source", async () => {
+    vi.stubEnv("SKYBLOCK_LOWEST_BIN_URL", "https://prices.test/map");
+    vi.stubGlobal("fetch", async () => new Response("unavailable", { status: 503 }));
+    const result = await lookupItem(stubClient(), { itemId: "HYPERION" });
+    expect(result.value).toMatchObject({ source: "none" });
+    expect(String((result.value as Record<string, unknown>).note)).not.toContain("no lowest-BIN source is configured");
+    expect(result.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/lowest.bin/i)]));
   });
 
   it("returns Bazaar buy/sell/spread for a Bazaar item", async () => {
@@ -85,9 +109,10 @@ describe("item lookup", () => {
     expect((result.item as Record<string, unknown>).id).toBe("HYPERION");
   });
 
-  it("can enrich a resolved item with official wiki sections", async () => {
+  it("can enrich a resolved item with explicitly configured wiki sections", async () => {
+    vi.stubEnv("SKYBLOCK_WIKI_BASE", "https://community.test");
     const fetchMock = vi.fn(async (url: string) => {
-      expect(url).toContain("wiki.hypixel.net/api.php");
+      expect(url).toContain("community.test/api.php");
       expect(url).toContain("titles=Hyperion");
       return wikiResponse({
         query: {
@@ -125,12 +150,24 @@ describe("item lookup", () => {
     const wiki = result.wiki as Record<string, unknown>;
     const sections = wiki.sections as Record<string, string>;
 
-    expect(wiki.source).toBe("official_hypixel_skyblock_wiki");
+    expect(wiki.source).toBe("configured_mediawiki");
+    expect(wiki.official).toBe(false);
     expect(wiki.title).toBe("Hyperion");
     expect(wiki.url).toBe("https://wiki.hypixel.net/Hyperion");
     expect(sections.summary).toContain("Legendary Dungeon Sword");
     expect(sections.obtaining).toContain("GIANT_FRAGMENT_LASER");
     expect(sections.usage).toContain("50% more damage against Withers");
+  });
+
+  it("labels configured MediaWiki failures as non-official configured-source errors", async () => {
+    vi.stubEnv("SKYBLOCK_WIKI_BASE", "https://offline-community.test");
+    vi.stubGlobal("fetch", async () => { throw new Error("community wiki offline"); });
+    const result = await lookupItem(stubClient(), { itemId: "HYPERION", includeWiki: true });
+    expect(result.wiki).toMatchObject({
+      source: "configured_mediawiki",
+      official: false,
+      error: "community wiki offline"
+    });
   });
 
   it("reports found=false for an unknown id", async () => {

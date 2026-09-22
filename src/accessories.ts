@@ -22,17 +22,18 @@ export function analyzeAccessoryBag(memberSummary: JsonObject | undefined): Json
     return undefined;
   }
 
-  const mp = asNumber(bag.highestMagicalPower) ?? 0;
+  const mp = asNumber(bag.highestMagicalPower);
   const selectedPower = asString(bag.selectedPower);
   const unlocked = new Set((asArray(bag.unlockedPowers) ?? []).map((value) => asString(value)?.toLowerCase()).filter(Boolean));
 
   return compactObject({
     magicalPower: mp,
+    magicalPowerBasis: mp !== undefined ? "highest_recorded" : undefined,
     selectedPower,
     unlockedPowers: [...unlocked],
     benchmark: benchmarks.accessories,
     tuning: bag.tuning,
-    issues: buildAccessoryIssues(mp)
+    issues: mp !== undefined ? buildAccessoryIssues(mp) : undefined
   });
 }
 

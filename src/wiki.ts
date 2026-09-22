@@ -1,10 +1,13 @@
 import type { JsonObject } from "./types.js";
-import { asArray, asRecord, asString, compactObject, parseEnvInteger, stripMinecraftFormatting } from "./utils.js";
+import { McpUserError } from "./errors.js";
+import { asArray, asRecord, asString, compactObject, stripMinecraftFormatting } from "./utils.js";
 import { VERSION } from "./version.js";
 
 const DEFAULT_WIKI_BASE = "https://wiki.hypixel.net";
 const DEFAULT_WIKI_TTL_MS = 10 * 60_000;
 const WIKI_SOURCE = "official_hypixel_skyblock_wiki";
+const CONFIGURED_SOURCE = "configured_mediawiki";
+const WIKI_RETIREMENT_URL = "https://hypixel.net/threads/end-of-the-official-hypixel-wiki-july-2026.6112020/";
 const TOP_LEVEL_ITEM_FIELDS = [
   "item",
   "summary",
@@ -22,8 +25,10 @@ const TOP_LEVEL_ITEM_FIELDS = [
 
 type WikiCacheEntry = {
   expiresAt: number;
-  value: JsonObject;
+  value: WikiResult;
 };
+
+type WikiResult = { data: JsonObject; meta: JsonObject };
 
 type WikiPageOptions = {
   title?: string;
@@ -37,12 +42,58 @@ type WikiSearchOptions = {
 };
 
 const wikiCache = new Map<string, WikiCacheEntry>();
+const wikiInFlight = new Map<string, Promise<WikiResult>>();
+let wikiCacheGeneration = 0;
+
+export function clearWikiCache(): number {
+  const cleared = wikiCache.size;
+  wikiCacheGeneration += 1;
+  wikiCache.clear();
+  wikiInFlight.clear();
+  return cleared;
+}
+
+export function wikiCacheStats(): { entries: number; maxEntries: number } {
+  return { entries: wikiCache.size, maxEntries: wikiInteger("SKYBLOCK_WIKI_CACHE_MAX_ENTRIES", 200, 1, 5_000) };
+}
+
+function wikiInteger(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  const value = raw?.trim() ? Number(raw) : NaN;
+  return Number.isFinite(value) ? Math.max(min, Math.min(max, Math.floor(value))) : fallback;
+}
+
+function wikiBase(): URL {
+  try {
+    const base = new URL(process.env.SKYBLOCK_WIKI_BASE?.trim() || DEFAULT_WIKI_BASE);
+    if (!["https:", "http:"].includes(base.protocol) || base.username || base.password) throw new Error("Invalid base");
+    return base;
+  } catch {
+    throw new McpUserError("SKYBLOCK_WIKI_BASE must be an HTTP(S) MediaWiki base URL without embedded credentials.");
+  }
+}
+
+function retiredWikiResult(): JsonObject | undefined {
+  if (wikiBase().hostname.toLowerCase() !== "wiki.hypixel.net") return undefined;
+  return {
+    found: false,
+    available: false,
+    status: "retired",
+    source: WIKI_SOURCE,
+    official: true,
+    retiredAt: "2026-07-21",
+    announcementUrl: WIKI_RETIREMENT_URL,
+    note: "Hypixel retired its official wiki in July 2026. Live official wiki content is unavailable. Configure SKYBLOCK_WIKI_BASE to use a separate MediaWiki source; its content will be labeled non-official."
+  };
+}
 
 export async function searchOfficialWiki(search: string, options?: WikiSearchOptions): Promise<JsonObject> {
   const query = search.trim();
   if (!query) {
     return { error: "Provide a non-empty search query." };
   }
+  const retired = retiredWikiResult();
+  if (retired) return { ...retired, query };
 
   const limit = clamp(options?.limit, 10, 1, 25);
   const result = await fetchWikiJson({
@@ -55,6 +106,8 @@ export async function searchOfficialWiki(search: string, options?: WikiSearchOpt
   const hits = (asArray(asRecord(result.data.query)?.search) ?? []).map(summarizeSearchHit);
 
   return compactObject({
+    source: CONFIGURED_SOURCE,
+    official: false,
     meta: result.meta,
     query,
     totalHits: searchInfo?.totalhits,
@@ -69,6 +122,8 @@ export async function getOfficialWikiPage(options: WikiPageOptions): Promise<Jso
   if (!requestedTitle && !search) {
     return { error: "Provide either title or search." };
   }
+  const retired = retiredWikiResult();
+  if (retired) return compactObject({ ...retired, title: requestedTitle, search });
 
   const direct = requestedTitle ? await fetchWikiPageByTitle(requestedTitle) : undefined;
   if (direct && !direct.missing) {
@@ -79,9 +134,10 @@ export async function getOfficialWikiPage(options: WikiPageOptions): Promise<Jso
   if (!query) {
     return {
       found: false,
-      source: WIKI_SOURCE,
+      source: CONFIGURED_SOURCE,
+      official: false,
       title: requestedTitle,
-      note: "No official wiki page matched the requested title."
+      note: "No configured wiki page matched the requested title."
     };
   }
 
@@ -92,11 +148,12 @@ export async function getOfficialWikiPage(options: WikiPageOptions): Promise<Jso
   if (!selectedTitle) {
     return compactObject({
       found: false,
-      source: WIKI_SOURCE,
+      source: CONFIGURED_SOURCE,
+      official: false,
       title: requestedTitle,
       search: query,
       candidates,
-      note: "No official wiki page matched the requested title or search."
+      note: "No configured wiki page matched the requested title or search."
     });
   }
 
@@ -104,7 +161,8 @@ export async function getOfficialWikiPage(options: WikiPageOptions): Promise<Jso
   if (page.missing) {
     return compactObject({
       found: false,
-      source: WIKI_SOURCE,
+      source: CONFIGURED_SOURCE,
+      official: false,
       title: selectedTitle,
       search: query,
       candidates,
@@ -174,6 +232,7 @@ async function fetchWikiPageByTitle(title: string): Promise<{ missing: boolean; 
     action: "query",
     prop: "info|revisions",
     titles: title,
+    redirects: "1",
     inprop: "url",
     rvprop: "content|timestamp",
     rvslots: "main"
@@ -190,7 +249,8 @@ function formatWikiPage(page: JsonObject, matchedBy: "title" | "search", options
 
   return compactObject({
     found: true,
-    source: WIKI_SOURCE,
+    source: CONFIGURED_SOURCE,
+    official: false,
     matchedBy,
     title: page.title,
     pageId: page.pageid,
@@ -202,11 +262,11 @@ function formatWikiPage(page: JsonObject, matchedBy: "title" | "search", options
   });
 }
 
-async function fetchWikiJson(params: Record<string, string>): Promise<{ data: JsonObject; meta: JsonObject }> {
-  const wikiBase = (process.env.SKYBLOCK_WIKI_BASE ?? DEFAULT_WIKI_BASE).replace(/\/$/, "");
-  const timeoutMs = parseEnvInteger("SKYBLOCK_WIKI_TIMEOUT_MS", 10_000);
-  const ttlMs = parseEnvInteger("SKYBLOCK_WIKI_CACHE_TTL_MS", DEFAULT_WIKI_TTL_MS);
-  const url = new URL("/api.php", `${wikiBase}/`);
+async function fetchWikiJson(params: Record<string, string>): Promise<WikiResult> {
+  const base = wikiBase();
+  // Preserve installations hosted under a path such as /w/.
+  const url = new URL("api.php", `${base.toString().replace(/\/$/, "")}/`);
+  const ttlMs = wikiInteger("SKYBLOCK_WIKI_CACHE_TTL_MS", DEFAULT_WIKI_TTL_MS, 0, 86_400_000);
 
   for (const [key, value] of Object.entries({
     format: "json",
@@ -218,25 +278,45 @@ async function fetchWikiJson(params: Record<string, string>): Promise<{ data: Js
 
   const cacheKey = url.toString();
   const cached = wikiCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return {
-      data: cached.value,
-      meta: {
-        cached: true,
-        source: cacheKey,
-        fetchedAt: new Date().toISOString()
-      }
-    };
+  if (ttlMs > 0 && cached && cached.expiresAt > Date.now()) {
+    const result = structuredClone(cached.value);
+    result.meta.cached = true;
+    return result;
   }
   if (cached) {
     wikiCache.delete(cacheKey);
   }
 
+  const existing = wikiInFlight.get(cacheKey);
+  if (existing) return structuredClone(await existing);
+  const generation = wikiCacheGeneration;
+  const pending = requestWikiJson(cacheKey, params).then((result) => {
+    if (ttlMs > 0 && generation === wikiCacheGeneration) {
+      const maxEntries = wikiCacheStats().maxEntries;
+      while (wikiCache.size >= maxEntries) {
+        const oldest = wikiCache.keys().next().value;
+        if (oldest === undefined) break;
+        wikiCache.delete(oldest);
+      }
+      wikiCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, value: result });
+    }
+    return result;
+  });
+  wikiInFlight.set(cacheKey, pending);
+  try {
+    return structuredClone(await pending);
+  } finally {
+    if (wikiInFlight.get(cacheKey) === pending) wikiInFlight.delete(cacheKey);
+  }
+}
+
+async function requestWikiJson(url: string, params: Record<string, string>): Promise<WikiResult> {
+  const timeoutMs = wikiInteger("SKYBLOCK_WIKI_TIMEOUT_MS", 10_000, 1, 120_000);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(cacheKey, {
+    const response = await fetch(url, {
       headers: {
         Accept: "application/json",
         "User-Agent": `hypixel-skyblock-mcp/${VERSION}`
@@ -245,35 +325,51 @@ async function fetchWikiJson(params: Record<string, string>): Promise<{ data: Js
     });
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`Official wiki API returned HTTP ${response.status}: ${response.statusText}`);
+      throw new Error(`Configured wiki API returned HTTP ${response.status}: ${response.statusText}`);
     }
 
     let data: unknown;
     try {
       data = JSON.parse(text) as unknown;
     } catch {
-      throw new Error("Official wiki API did not return JSON. The endpoint may be temporarily blocked or challenged.");
+      throw new Error("Configured wiki API did not return JSON. Check SKYBLOCK_WIKI_BASE; the endpoint may be blocked or unavailable.");
     }
 
-    const record = asRecord(data) ?? {};
-    if (ttlMs > 0) {
-      wikiCache.set(cacheKey, {
-        expiresAt: Date.now() + ttlMs,
-        value: record
-      });
+    const record = asRecord(data);
+    const apiError = asRecord(record?.error);
+    if (apiError) {
+      throw new Error(`Configured wiki API error ${asString(apiError.code) ?? "unknown"}: ${asString(apiError.info) ?? "request failed"}`);
+    }
+    const query = asRecord(record?.query);
+    if (!record || !query) throw new Error("Invalid wiki response: expected a MediaWiki query result.");
+    if (params.list === "search") {
+      const hits = asArray(query.search);
+      if (!hits || hits.some((hit) => !asString(asRecord(hit)?.title))) {
+        throw new Error("Invalid wiki response: expected search results with page titles.");
+      }
+    } else {
+      const page = asRecord(asArray(query.pages)?.[0]);
+      if (!page || !asString(page.title)) throw new Error("Invalid wiki response: expected a page with a title.");
+      if (page.invalid) throw new McpUserError(`Invalid wiki title: ${asString(page.invalidreason) ?? page.title}`);
+      if (!page.missing) {
+        const revision = asRecord(asArray(page.revisions)?.[0]);
+        if (asString(asRecord(asRecord(revision?.slots)?.main)?.content) === undefined) {
+          throw new Error("Invalid wiki response: page revision content is unavailable.");
+        }
+      }
     }
 
     return {
       data: record,
       meta: {
         cached: false,
-        source: cacheKey,
+        source: url,
         fetchedAt: new Date().toISOString()
       }
     };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error(`Official wiki request timed out after ${timeoutMs}ms`);
+      throw new Error(`Configured wiki request timed out after ${timeoutMs}ms`);
     }
     throw error;
   } finally {
@@ -314,7 +410,8 @@ function cleanWikiText(value: string, maxChars: number): string | undefined {
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/?blockquote>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
-    .replace(/^\s*[!*|}-].*$/gm, " ")
+    .replace(/^[ \t]*[*#]+[ \t]*/gm, "")
+    .replace(/^[ \t]*[!|}].*$/gm, " ")
     .replace(/\s+/g, " ")
     .trim();
 

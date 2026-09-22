@@ -158,6 +158,24 @@ describe("freshnessFromMeta", () => {
     expect(result.note).toBe("metadata only");
   });
 
+  it("reports old upstream snapshots even when the HTTP fetch just finished", () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-22T12:10:00Z"));
+    const result = freshnessFromMeta(
+      { fetchedAt: "2026-09-22T12:10:00Z", cached: false, source: "x" },
+      60, undefined, Date.parse("2026-09-22T12:00:00Z")
+    );
+    expect(result.dataAgeSeconds).toBe(600);
+    expect(result.ageBasis).toBe("upstream");
+    expect(result.fetchedAt).toBe("2026-09-22T12:10:00Z");
+    expect(result.staleWarning).toContain("600s");
+  });
+
+  it("does not describe a supplied invalid upstream timestamp as fresh", () => {
+    const result = freshnessFromMeta({ fetchedAt: new Date().toISOString(), cached: false, source: "x" }, 60, undefined, 0);
+    expect(result.dataAgeSeconds).toBeNull();
+    expect(result.staleWarning).toContain("timestamp");
+  });
+
   it("freshnessFromTimestamp returns undefined without a timestamp", () => {
     expect(freshnessFromTimestamp(undefined, false, 60)).toBeUndefined();
     expect(freshnessFromTimestamp("2026-06-28T00:00:00.000Z", true, 60)?.cached).toBe(true);

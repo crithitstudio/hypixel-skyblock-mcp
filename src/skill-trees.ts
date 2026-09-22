@@ -54,6 +54,22 @@ export const NUCLEUS_CRYSTAL_KEYS = [
 
 const NUCLEUS_CRYSTAL_KEY_SET = new Set<string>(NUCLEUS_CRYSTAL_KEYS);
 
+// Per-level costs from NEU constants/leveling.json (HOTM), verified 2026-09-22:
+// https://github.com/NotEnoughUpdates/NotEnoughUpdates-REPO/blob/master/constants/leveling.json
+const HOTM_XP_STEPS = [0, 3_000, 9_000, 25_000, 60_000, 100_000, 150_000, 210_000, 290_000, 400_000];
+
+function hotmLevelFromExperience(experience: number | undefined): number | undefined {
+  if (experience === undefined || experience < 0) return undefined;
+  let total = 0;
+  let level = 0;
+  for (const step of HOTM_XP_STEPS) {
+    total += step;
+    if (experience < total) break;
+    level++;
+  }
+  return level;
+}
+
 export function isNucleusCrystal(crystalKey: string): boolean {
   return NUCLEUS_CRYSTAL_KEY_SET.has(crystalKey.toLowerCase());
 }
@@ -102,17 +118,20 @@ export function extractTreePerks(nodes: JsonObject | undefined, tree: "mining" |
 }
 
 export function summarizeHotmTree(skillTree: JsonObject | undefined, miningCore: JsonObject | undefined): JsonObject | undefined {
-  const miningNodes = asRecord(asRecord(skillTree?.nodes)?.mining);
+  const miningNodes = asRecord(asRecord(skillTree?.nodes)?.mining) ?? asRecord(miningCore?.nodes);
   if (!miningCore && !miningNodes) {
     return undefined;
   }
 
   const perks = extractTreePerks(miningNodes, "mining");
-  const unlockedPerks = perks.length;
-  const hotmLevel = asNumber(miningNodes?.core_of_the_mountain);
+  const unlockedPerks = miningNodes ? perks.length : undefined;
+  const experience = asNumber(miningCore?.experience);
+  const hotmLevel = hotmLevelFromExperience(experience);
 
   return compactObject({
     level: hotmLevel,
+    experience,
+    coreOfTheMountainLevel: asNumber(miningNodes?.core_of_the_mountain),
     unlockedPerks,
     selectedAbility: asString(getPath(skillTree, ["selected_ability", "mining"])),
     perks,
@@ -142,7 +161,7 @@ export function summarizeHotfTree(skillTree: JsonObject | undefined, foragingCor
   const perks = extractTreePerks(foragingNodes, "foraging");
 
   return compactObject({
-    unlockedPerks: perks.length,
+    unlockedPerks: foragingNodes ? perks.length : undefined,
     selectedAbility: asString(getPath(skillTree, ["selected_ability", "foraging"])),
     perks,
     whispers: compactObject({

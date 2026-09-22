@@ -1,4 +1,5 @@
 import * as nbt from "prismarine-nbt";
+import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   classifyInventoryPath,
@@ -90,6 +91,16 @@ describe("extractInventoryItems", () => {
   it("returns [] when there is no item array", () => {
     expect(extractInventoryItems({ nope: true })).toEqual([]);
   });
+
+  it("preserves legacy numeric Minecraft IDs but omits air and empty stacks", () => {
+    expect(extractInventoryItems({ i: [
+      { id: 4, Count: 64 },
+      { id: 0, Count: 0 },
+      { id: "minecraft:air", Count: 1 },
+      { id: "diamond", Count: 0 },
+      { id: "stone", Count: -1 }
+    ] })).toEqual([expect.objectContaining({ minecraftId: "4", count: 64 })]);
+  });
 });
 
 describe("findNbtDataLocations + filter", () => {
@@ -133,6 +144,28 @@ describe("findNbtDataLocations + filter", () => {
 });
 
 describe("decode round-trip + error handling", () => {
+  it("bounds compressed NBT expansion before parsing", async () => {
+    const oversized = gzipSync(Buffer.alloc(17 * 1024 * 1024)).toString("base64");
+    await expect(decodeBase64Nbt(oversized)).rejects.toThrow(/size|limit|large/i);
+  });
+
+  it("rejects nested compression instead of decompressing a second time without a bound", async () => {
+    const payload = Buffer.alloc(17 * 1024 * 1024);
+    payload[0] = 10; // empty compound, followed by padding
+    await expect(decodeBase64Nbt(gzipSync(gzipSync(payload)).toString("base64"))).rejects.toThrow();
+  });
+
+  it("rejects oversized encoded data and malformed base64", async () => {
+    await expect(decodeBase64Nbt("A".repeat(6 * 1024 * 1024))).rejects.toThrow(/size|limit|large/i);
+    await expect(decodeBase64Nbt("%%%invalid%%%")).rejects.toThrow(/base64/i);
+  });
+
+  it("decodes gzipped Java NBT", async () => {
+    const node = nbt.comp({ i: nbt.list(nbt.comp([{ id: nbt.short(4), Count: nbt.byte(64) }])) });
+    const compressed = gzipSync(nbt.writeUncompressed(node as never)).toString("base64");
+    expect(extractInventoryItems(await decodeBase64Nbt(compressed))[0]).toMatchObject({ minecraftId: "4", count: 64 });
+  });
+
   it("decodes a real base64 NBT payload into items", async () => {
     const node = nbt.comp({
       i: nbt.list(
@@ -163,5 +196,21 @@ describe("decode round-trip + error handling", () => {
     expect(decoded.itemCount).toBe(0);
     expect(decoded.items).toEqual([]);
     expect(decoded.error).toBeTruthy();
+  });
+
+  it("does not report a non-inventory NBT root as an empty inventory", async () => {
+    const data = nbt.writeUncompressed(nbt.comp({ unrelated: nbt.int(1) }) as never).toString("base64");
+    const decoded = await decodeInventoryData("inventory.inv_contents", data, 60);
+    expect(decoded.error).toMatch(/inventory|item list/i);
+  });
+
+  it("discovers malformed inventory sections so callers can report failed coverage", () => {
+    expect(findNbtDataLocations({ inventory: {
+      personal_vault_contents: { data: "corrupt!" },
+      inv_contents: { data: "" },
+      ender_chest_contents: { data: 42 }
+    } }).map((entry) => entry.path)).toEqual([
+      "inventory.personal_vault_contents", "inventory.inv_contents", "inventory.ender_chest_contents"
+    ]);
   });
 });

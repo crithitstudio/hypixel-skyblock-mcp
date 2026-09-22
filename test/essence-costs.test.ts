@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeEssenceUpgrade, summarizeEquippedEssenceUpgrades } from "../src/essence-costs.js";
+import { computeEssenceUpgrade, getEssenceUpgradeCost, summarizeEquippedEssenceUpgrades } from "../src/essence-costs.js";
 import type { HypixelClient } from "../src/hypixelClient.js";
 
 // Minimal stub that returns a canned Bazaar response so pricing is deterministic
@@ -59,6 +59,27 @@ describe("essence upgrade costs", () => {
 });
 
 describe("equipped essence upgrade aggregation", () => {
+  it("reports a subtotal, not a full upgrade cost, when essence has no price", async () => {
+    const result = await getEssenceUpgradeCost(stubClient({}), { itemId: "HYPERION", fromStar: 0, toStar: 5 });
+    expect(result.pricing).toMatchObject({ pricingComplete: false, pricedSubtotalCoins: 35000, unpriced: ["ESSENCE_WITHER"] });
+    expect((result.pricing as Record<string, unknown>).estimatedTotalCoins).toBeUndefined();
+  });
+
+  it("keeps per-piece missing components so advisors cannot treat partial costs as affordable", async () => {
+    const result = await summarizeEquippedEssenceUpgrades(stubClient({}), [{ skyblockId: "POWER_WITHER_HELMET" }]);
+    expect(result).toMatchObject({ pricingComplete: false, pricedSubtotalCoins: 35000 });
+    expect(result?.estimatedTotalCoins).toBeUndefined();
+    expect(result?.perPiece).toEqual([expect.objectContaining({ pricingComplete: false, pricedSubtotalCoins: 35000, unpriced: ["ESSENCE_WITHER"] })]);
+    expect((result?.perPiece as Record<string, unknown>[])[0]?.estimatedCoins).toBeUndefined();
+  });
+
+  it("keeps non-market materials visible even when all essence is priced", async () => {
+    const result = await getEssenceUpgradeCost(stubClient({ ESSENCE_CRIMSON: 100 }), { itemId: "CRIMSON_HELMET" });
+    expect(result.materials).toEqual({ HEAVY_PEARL: 9 });
+    expect(result.pricing).toMatchObject({ pricingComplete: false, pricedSubtotalCoins: 1_990_500, unpriced: ["HEAVY_PEARL"] });
+    expect((result.pricing as Record<string, unknown>).estimatedTotalCoins).toBeUndefined();
+  });
+
   it("aggregates only upgradeable pieces and skips maxed/unknown gear", async () => {
     const client = stubClient({ ESSENCE_WITHER: 2000 });
     const summary = await summarizeEquippedEssenceUpgrades(client, [

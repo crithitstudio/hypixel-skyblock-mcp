@@ -1,6 +1,6 @@
 # Hypixel SkyBlock MCP
 
-An AI-facing Model Context Protocol server for Hypixel SkyBlock data. It fetches profile data, public resources, Bazaar prices, auctions, museum/garden data, HOTM/HOTF skill trees, merged storage search, and base64 gzipped NBT inventory payloads, then returns compact JSON that is easier for an AI assistant to use for guides and tips.
+An AI-facing Model Context Protocol server for Hypixel SkyBlock data. Its 23 tools cover profiles, progression, inventory/storage, Bazaar and auctions, upgrade costs, net worth, Bingo, and configured wiki sources. Results distinguish API observations, estimates, missing data, and incomplete pricing so an assistant can give grounded advice.
 
 ## Requirements
 
@@ -32,7 +32,7 @@ See [`.env.example`](.env.example) for the full list of supported environment va
 ### Running from source
 
 ```bash
-npm install
+npm ci
 npm run build
 node dist/server.js   # reads HYPIXEL_API_KEY from the environment
 ```
@@ -42,14 +42,17 @@ node dist/server.js   # reads HYPIXEL_API_KEY from the environment
 ```bash
 npm test          # run the unit tests
 npm run coverage  # run tests + enforce coverage thresholds
-npm run check     # build + test (also runs automatically before publish)
+npm run smoke     # exercise the compiled server over real MCP stdio
+npm run check     # build + coverage + stdio smoke (also before publish)
 ```
 
-GitHub Actions runs the build and the coverage gate on every push and pull
-request (`.github/workflows/ci.yml`). The coverage gate (configured in
-`vitest.config.ts`) is scoped to the deterministic, pure-logic modules; the
-network/orchestration layer that calls the live Hypixel API is verified
-manually rather than by unit tests.
+GitHub Actions runs the build, coverage gate, and stdio smoke check on Node 22 and
+24 (`.github/workflows/ci.yml`). Tests use realistic fixtures and mocked HTTP
+responses; they do not need an API key. The coverage gate includes data logic,
+HTTP/cache behavior, wiki integration, pricing/net-worth, and MCP registration.
+Profile and audit workflows also have integration tests. A separate smoke check
+starts the compiled CLI and verifies initialization, tool discovery, structured
+results, errors, and shutdown. The build uses portable Node filesystem operations.
 
 Publishing is automated (`.github/workflows/publish.yml`): creating a GitHub
 Release whose tag matches the `package.json` version publishes the package to
@@ -65,7 +68,7 @@ workflow in the package's npm settings instead.
 - `resolve_player`: username/UUID normalization through Mojang.
 - `hypixel_player`: network status, rank, login times, karma, and selected stats.
 - `skyblock_profiles`: compact list of a player's SkyBlock profiles.
-- `skyblock_profile`: one profile's AI-readable context with skills, progression, slayers, dungeons, pets, collections, essence, accessories, and optional decoded inventories.
+- `skyblock_profile`: one profile's AI-readable context with skills, progression, slayers, dungeon classes/runs, pet levels/details, collections, essence, accessories, trophy fish, Jacob contest summaries, and optional decoded inventories.
 
 ### Inventories & storage
 
@@ -76,33 +79,51 @@ workflow in the package's npm settings instead.
 
 - `skyblock_audit`: compact audit with official skill levels, **full HOTM/HOTF perk trees**, minions, bestiary, crimson isle, rift, essence, gear/loadouts (including **essence cost to finish starring equipped gear**, priced live), accessories, ranked gaps, and next actions.
 - `skyblock_guide_context`: profile plus mayor and Bazaar economy signals for tailored advice.
+- `skyblock_upgrade_advisor`: rank supported star and accessory upgrades by estimated coin cost, with budget filtering, pricing completeness, and explicit unsupported-source reasons. This is not a stat-gain optimizer; unknown-cost upgrades remain descriptive.
 
 ### World systems
 
 - `skyblock_museum`: museum donations and value summary.
 - `skyblock_garden`: garden plots, commissions, and composter data.
+- `skyblock_bingo`: a player's event history and progress matched against current event goals when available.
 
 ### Economy & resources
 
 - `skyblock_networth`: estimate a profile's net worth from liquid coins, decoded inventory/storage holdings, sacks, and supported item modifiers, priced with live Bazaar data. Returns a total, per-section breakdown, modifier breakdown, top items by value, and a pricing-coverage report.
-- `skyblock_item`: look up one item by ID or name and get official metadata plus a live value (Bazaar buy/sell/spread/volume, lowest-BIN when configured, or a clear auction-only note). Set `includeWiki: true` to enrich the result with official Hypixel SkyBlock Wiki page URL, revision timestamp, and cleaned obtaining/upgrading/usage/history sections. Ambiguous searches return candidate IDs, and it resolves in-game names (e.g. "Necron's Chestplate") to canonical IDs.
+- `skyblock_item`: look up an item by ID/name for official metadata and Bazaar or configured lowest-BIN prices. Metadata remains available during pricing outages. `includeWiki: true` adds configured wiki context or an explicit retirement/unavailability result. Ambiguous searches return candidate IDs, and in-game names resolve to canonical IDs.
 - `skyblock_resource`: items, skills, collections, election/mayor, bingo, or news.
-- `skyblock_wiki_search`: search the official Hypixel SkyBlock Wiki through its MediaWiki API.
-- `skyblock_wiki_page`: fetch a specific official wiki page and return AI-readable section summaries from the page wikitext.
+- `skyblock_wiki_search`: search a configured MediaWiki source; see wiki availability below.
+- `skyblock_wiki_page`: fetch a page with source attribution, revision time, redirects, and readable section summaries.
 - `skyblock_bazaar`: Bazaar prices, volumes, and spread signals.
 - `skyblock_auctions`: active pages, ended auctions, or keyed lookups.
-- `skyblock_essence_costs`: exact essence, coin, and material cost to star up (or master-star) a dungeon/crimson item by SkyBlock ID, with an optional live-Bazaar coin estimate. Returns `found: false` with suggestions for unknown or non-upgradeable IDs.
+- `skyblock_essence_costs`: exact essence, coin, and material cost for essence-funded stars on a dungeon/crimson item by SkyBlock ID, with an optional live-Bazaar coin estimate. Master Star items are not priced; higher targets are clamped to the bundled table with an explanatory note. Returns `found: false` with suggestions for unknown or non-upgradeable IDs.
 
 ### Utilities
 
 - `decode_skyblock_nbt`: decode a SkyBlock NBT payload.
-- `cache_clear`: clear the in-memory response cache.
+- `cache_clear`: clear Hypixel, Mojang, and wiki caches, including invalidating pending cache writes.
+- `server_status`: inspect version, configuration availability, and cache usage without network requests or credential disclosure.
+
+The server also exposes the `skyblock://guide` resource and a `review_profile`
+prompt (required `username`, optional `focus`). Tool responses carry JSON text and
+matching `structuredContent`; execution failures set MCP `isError: true`. Tool
+annotations distinguish external reads, local decoding, and cache mutation.
+
+## Wiki availability
+
+Hypixel [retired its official wiki on July 21, 2026](https://hypixel.net/threads/end-of-the-official-hypixel-wiki-july-2026.6112020/).
+The default wiki tools return `available: false`, `status: "retired"`, and the
+announcement URL without requesting that service. To use another MediaWiki
+installation, set `SKYBLOCK_WIKI_BASE` to its base URL (with an `/api.php` endpoint).
+Replacement results explicitly carry `source: "configured_mediawiki"` and
+`official: false`. No community provider is silently selected or endorsed.
 
 ## HOTM, HOTF, and storage
 
 **HOTM (Heart of the Mountain)** is summarized in `member.progression.hotm` and `skyblock_audit`:
 
-- HOTM level, powder totals, crystal states, selected ability
+- HOTM level from reported XP, powder totals, crystal states, selected ability
+- Core of the Mountain perk level reported separately from HOTM level
 - Full unlocked perk list with human-readable names
 
 **HOTF (Heart of the Forest)** is summarized in `member.progression.hotf`:
@@ -125,6 +146,9 @@ workflow in the package's npm settings instead.
 ```
 
 `skyblock_inventory` remains the tool for raw per-section NBT when you need slot-level detail.
+NBT input is bounded to 4 MiB of base64 text and 16 MiB after gzip decompression.
+Malformed sections are reported as failures, and truncated scans are marked;
+incomplete accessory bags do not produce claims that an upgrade is missing.
 
 ## Player ratings & metrics
 
@@ -144,6 +168,15 @@ workflow in the package's npm settings instead.
 - **Items** in decoded inventory, ender chest, backpacks, personal vault, wardrobe, armor, equipment, and bags, priced by SkyBlock ID via the **Bazaar**.
 - **Sacks**, priced via the Bazaar.
 
+Physical items repeated across inventory/wardrobe views are deduplicated by their
+item UUID, not their SkyBlock ID. Standalone single-enchantment books resolve to
+their actual Bazaar product. Coverage reports failed/omitted sections, unpriced
+and unidentified items, sack pricing, and missing balances. `complete` applies
+only to the supported holdings; pets, museum holdings, and auction/Bazaar escrow
+remain excluded. The bank balance belongs to the co-op, not solely the selected
+member. A reported total is the sum of known priced holdings, not proof of the
+player's complete wealth.
+
 On top of the **base SkyBlock-ID price**, `skyblock_networth` adds **modifier value** for enchantments, hot potato/fuming books, recombobulators, essence/master stars, socketed gemstones, and reforge stones (set `includeModifiers: false` to disable). Each modifier is valued at the [SkyHelper-Networth](https://github.com/Altpapier/SkyHelper-Networth) "application worth" fraction of the live Bazaar price of the component (e.g. enchantments at 85%, essence at 75%, gemstones and reforge stones at 100%), and essence/master-star costs come from the official items resource's `upgrade_costs`. The response reports `items.modifiers` (total, `byType` breakdown, and `unpricedComponents`).
 
 The modifier categories above are the ones currently modelled. SkyHelper values several more that this server does **not** yet add, so `total` is a conservative estimate for heavily upgraded items: gemstone slot-unlock costs, runes, dyes, pet items/pet levels, art of war/peace, power scrolls, and other cosmetic or upgrade consumables are excluded.
@@ -154,7 +187,18 @@ Auction-only items are priced only when an external lowest-BIN source is configu
 
 ## Notes
 
-Hypixel profile data depends on each player's in-game API settings. When fields are missing, the MCP returns `privacy` notes so the AI does not overclaim inventory, pet, collection, or skill state.
+Hypixel profile data depends on each player's in-game API settings. Missing fields
+stay unknown, with privacy/coverage notes. Audits skip recommendations that require
+unavailable skills, magical power, slayer claims, or inventory data. Explicit
+profile/member selections that do not match return an error, rather than choosing
+a different profile or co-op member. Optional economy/mayor failures leave the
+profile audit usable and produce warnings.
+
+Market results distinguish HTTP retrieval time from upstream snapshot time.
+`freshness.ageBasis` explains which timestamp is available; external price maps
+without snapshot timestamps have unknown age. Missing essence/material prices
+produce `pricingComplete: false`, `pricedSubtotalCoins`, and missing-component
+details; they never produce a complete upgrade-cost estimate.
 
 Skill levels use Hypixel's official `/v2/resources/skyblock/skills` tables (bundled in `src/skill-tables.json`). SkyBlock level uses the flat 100-XP-per-level formula, pet levels use the official per-rarity XP tables (Golden/Jade/Rose Dragons cap at level 200), and Garden level uses the real Garden XP table (15 levels, capping at 60,120 XP).
 
@@ -162,4 +206,11 @@ Essence upgrade costs (`skyblock_essence_costs`) come from the NotEnoughUpdates 
 
 For profile reviews, prefer `skyblock_audit` over `skyblock_guide_context` when you want compact gaps and next actions.
 
-The server uses the official Hypixel Public API v2. Keyed endpoints use the `API-Key` header and report rate-limit headers when Hypixel provides them.
+The server uses the official Hypixel Public API v2. Keyed endpoints use the
+`API-Key` header and report rate-limit headers. Transient failures retry with
+bounded backoff; identical concurrent requests share one fetch. Failed responses
+are not cached. Cache sizes, timeouts, and retry counts are bounded.
+
+Bundled game tables and heuristic advice have limited scope and may need updates
+as the game changes. Reforge/enchant/HOTM/pet optimization and full pet/cosmetic
+valuation are not implemented; the upgrade advisor reports these limitations.

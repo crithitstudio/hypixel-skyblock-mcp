@@ -92,15 +92,21 @@ function summarizeMinions(member: JsonObject): JsonObject | undefined {
   const playerData = asRecord(member.player_data);
   const generators = asRecord(playerData?.generators) ?? asRecord(member.generators);
   const unlocked = asArray(playerData?.unlocked_generators) ?? asArray(member.unlocked_generators);
+  // Hypixel's profile migration maps crafted_generators to player_data.crafted_generators.
+  const crafted = asArray(playerData?.crafted_generators) ?? asArray(member.crafted_generators) ??
+    (generators ? Object.keys(generators) : undefined);
 
-  if (!generators && !unlocked?.length) {
+  if (!crafted && !unlocked) {
     return undefined;
   }
 
-  const crafted = generators ? Object.keys(generators).length : 0;
+  const craftedIds = crafted?.filter((id): id is string => typeof id === "string");
+  const craftedTypes = craftedIds ? new Set(craftedIds.map((id) => id.replace(/_\d+$/, ""))) : undefined;
 
   return compactObject({
-    craftedSlots: crafted,
+    craftedVariants: craftedIds ? new Set(craftedIds).size : undefined,
+    craftedTypes: craftedTypes?.size,
+    scope: "member",
     unlockedTypes: unlocked?.length,
     uniqueTypes: unlocked
   });
@@ -141,8 +147,8 @@ function summarizeCrimsonIsle(member: JsonObject): JsonObject | undefined {
 
   return compactObject({
     selectedFaction: asString(nether.selected_faction) ?? asString(getPath(nether, ["faction", "selected"])),
-    magesReputation: asNumber(getPath(nether, ["reputation", "mages"])),
-    barbariansReputation: asNumber(getPath(nether, ["reputation", "barbarians"])),
+    magesReputation: asNumber(nether.mages_reputation) ?? asNumber(getPath(nether, ["reputation", "mages"])),
+    barbariansReputation: asNumber(nether.barbarians_reputation) ?? asNumber(getPath(nether, ["reputation", "barbarians"])),
     kuudraTiersUnlocked: kuudraCounts ? kuudraCounts.filter((count) => count > 0).length : undefined,
     kuudraRunsCompleted: kuudraCounts ? kuudraCounts.reduce((sum, count) => sum + count, 0) : undefined,
     abiphoneContacts: asArray(getPath(nether, ["abiphone", "active_contacts"]))?.length ??
@@ -196,17 +202,21 @@ export function summarizeMuseumMember(museumData: JsonObject | undefined, member
     return undefined;
   }
 
-  const items = asArray(member.items) ?? [];
+  const itemMap = asRecord(member.items);
+  const items = asArray(member.items) ?? (itemMap ? Object.values(itemMap) : undefined);
   const types = new Set(
-    items
+    (items ?? [])
       .map((item) => asString(asRecord(item)?.type))
       .filter((value): value is string => Boolean(value))
   );
 
   return compactObject({
     value: asNumber(member.value),
-    itemCount: items.length,
-    uniqueTypes: types.size,
+    itemCount: items?.length,
+    specialItemCount: asArray(member.special)?.length,
+    donatedItemIds: itemMap ? Object.keys(itemMap).slice(0, 100) : undefined,
+    donatedItemIdsTruncated: itemMap ? Object.keys(itemMap).length > 100 : undefined,
+    uniqueTypes: items ? types.size : undefined,
     categories: [...types].slice(0, 20)
   });
 }

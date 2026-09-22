@@ -1,4 +1,6 @@
 import * as nbt from "prismarine-nbt";
+import { gunzip } from "node:zlib";
+import { McpUserError } from "./errors.js";
 import type { DecodedInventory, DecodedInventoryItem, JsonObject } from "./types.js";
 import { asArray, asNumber, asRecord, asString, isRecord, stripMinecraftFormatting } from "./utils.js";
 
@@ -22,9 +24,28 @@ export type NbtDataLocation = {
   sectionType: string;
 };
 
+export const MAX_NBT_BASE64_CHARS = 4 * 1024 * 1024;
+const MAX_NBT_BYTES = 16 * 1024 * 1024;
+
 export async function decodeBase64Nbt(data: string): Promise<unknown> {
-  const buffer = Buffer.from(data, "base64");
-  const { parsed } = await nbt.parse(buffer);
+  if (data.length > MAX_NBT_BASE64_CHARS) {
+    throw new McpUserError("NBT payload is too large; the encoded size limit is 4 MiB.");
+  }
+  if (!data.length || !/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length % 4 === 1) {
+    throw new McpUserError("NBT payload must be valid base64.");
+  }
+  let buffer: Buffer = Buffer.from(data, "base64");
+  if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+    buffer = await new Promise<Buffer>((resolve, reject) => {
+      gunzip(buffer, { maxOutputLength: MAX_NBT_BYTES }, (error, result) => {
+        if (error) reject(new McpUserError(`Invalid compressed NBT or expanded size exceeds the 16 MiB limit: ${error.message}`));
+        else resolve(result);
+      });
+    });
+  }
+  // Hypixel uses Java/big-endian NBT. Parsing uncompressed bytes avoids the
+  // library's unbounded gunzip and repeated endianness guesses on malformed data.
+  const parsed = nbt.parseUncompressed(buffer, "big");
   return nbt.simplify(parsed) as unknown;
 }
 
@@ -38,6 +59,9 @@ export async function decodeInventoryData(
 
   try {
     const simplified = await decodeBase64Nbt(data);
+    if (!inventoryItemList(simplified)) {
+      throw new McpUserError("Decoded NBT does not contain an inventory item list.");
+    }
     const items = extractInventoryItems(simplified, options);
     const shown = items.slice(0, maxItems);
 
@@ -80,10 +104,7 @@ export async function decodeInventoriesFromMember(
 }
 
 export function extractInventoryItems(simplifiedNbt: unknown, options?: InventoryDecodeOptions): DecodedInventoryItem[] {
-  const candidate =
-    asArray(asRecord(simplifiedNbt)?.i) ??
-    asArray(asRecord(asRecord(simplifiedNbt)?.value)?.i) ??
-    asArray(simplifiedNbt);
+  const candidate = inventoryItemList(simplifiedNbt);
 
   if (!candidate) {
     return [];
@@ -92,6 +113,10 @@ export function extractInventoryItems(simplifiedNbt: unknown, options?: Inventor
   return candidate
     .map((item, index) => summarizeNbtItem(item, index, options))
     .filter((item): item is DecodedInventoryItem => Boolean(item));
+}
+
+function inventoryItemList(value: unknown): unknown[] | undefined {
+  return asArray(asRecord(value)?.i) ?? asArray(asRecord(asRecord(value)?.value)?.i) ?? asArray(value);
 }
 
 export function findNbtDataLocations(
@@ -108,13 +133,13 @@ export function findNbtDataLocations(
   const locations: NbtDataLocation[] = [];
 
   if (
-    currentData &&
-    looksLikeBase64Nbt(currentData) &&
-    (options?.includeAllNbtData || isLikelyInventoryPath(currentPath))
+    Object.hasOwn(value, "data") &&
+    (isLikelyInventoryPath(currentPath) ||
+      (options?.includeAllNbtData && currentData && looksLikeBase64Nbt(currentData)))
   ) {
     locations.push({
       path: currentPath || "root",
-      data: currentData,
+      data: currentData ?? "",
       sectionType: classifyInventoryPath(currentPath)
     });
   }
@@ -179,8 +204,12 @@ function summarizeNbtItem(item: unknown, fallbackSlot: number, options?: Invento
     return undefined;
   }
 
-  const id = asString(record.id);
+  const numericId = asNumber(record.id);
+  const id = asString(record.id) ?? (numericId !== undefined && numericId > 0 ? String(numericId) : undefined);
   const count = asNumber(record.Count) ?? asNumber(record.count);
+  if (numericId === 0 || id === "air" || id === "minecraft:air" || (count !== undefined && count <= 0)) {
+    return undefined;
+  }
   const tag = asRecord(record.tag);
   const display = asRecord(tag?.display);
   const extra = asRecord(tag?.ExtraAttributes);

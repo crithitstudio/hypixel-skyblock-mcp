@@ -4,6 +4,7 @@ import { summarizeEquippedEssenceUpgrades } from "./essence-costs.js";
 import type { EquippedGearPiece } from "./essence-costs.js";
 import { summarizeEquippedGear } from "./gear.js";
 import type { HypixelClient } from "./hypixelClient.js";
+import { findNbtDataLocations } from "./nbt.js";
 import { buildPriceBook } from "./pricing.js";
 import type { PriceBasis } from "./pricing.js";
 import { getSkyblockProfileContext } from "./skyblock.js";
@@ -54,6 +55,8 @@ type UpgradeEntry = {
   coinCost?: number;
   /** false when the coin figure leans on live-Bazaar/lowest-BIN estimates rather than exact game cost. */
   coinCostExact?: boolean;
+  pricedSubtotalCoins?: number;
+  unpriced?: string[];
   prerequisites?: string[];
   caveats?: string[];
   confidence: UpgradeConfidence;
@@ -94,6 +97,8 @@ function starUpgrades(essenceUpgrades: JsonObject | undefined): UpgradeEntry[] {
     const fromStar = asNumber(record.fromStar);
     const toStar = asNumber(record.toStar);
     const essenceType = asString(record.essenceType);
+    const missing = (asArray(record.unpriced) ?? []).filter((id): id is string => typeof id === "string");
+    const cost = record.pricingComplete === false || missing.length ? undefined : asNumber(record.estimatedCoins);
 
     entries.push(
       compactObject({
@@ -104,13 +109,17 @@ function starUpgrades(essenceUpgrades: JsonObject | undefined): UpgradeEntry[] {
           fromTier: fromStar,
           toTier: toStar
         }),
-        coinCost: asNumber(record.estimatedCoins),
-        coinCostExact: false,
+        coinCost: cost,
+        coinCostExact: cost === undefined ? undefined : false,
+        pricedSubtotalCoins: asNumber(record.pricedSubtotalCoins),
+        unpriced: missing.length ? missing : undefined,
         prerequisites: essenceType ? [`${essenceType} essence (farm via dungeons / Kuudra)`] : undefined,
         caveats: [
-          "Coin portion is the exact game cost; the essence/material portion is a live-Bazaar estimate that moves with the market."
+          cost === undefined
+            ? "Some required components have no price. The priced subtotal is not the full cost and does not establish affordability."
+            : "Coin portion is the exact game cost; the essence/material portion is a live-Bazaar estimate that moves with the market."
         ],
-        confidence: "estimate"
+        confidence: cost === undefined ? "descriptive" : "estimate"
       }) as UpgradeEntry
     );
   }
@@ -260,8 +269,9 @@ export async function getUpgradeAdvisor(client: HypixelClient, options: UpgradeA
   const profileContext = await getSkyblockProfileContext(client, {
     ...options,
     decodeInventories: true,
+    includeRawMember: true,
     includeItemDetails: false,
-    maxItemsPerInventory: 45,
+    maxItemsPerInventory: 500,
     maxInventorySections: 32,
     inventorySectionTypes: ["armor", "equipment", "accessory_bag"],
     maxLoreLines: 0
@@ -274,10 +284,19 @@ export async function getUpgradeAdvisor(client: HypixelClient, options: UpgradeA
   const wantsStar = requested.includes("star");
   const wantsAccessory = requested.includes("accessory");
 
-  const accessoryBag = wantsAccessory
-    ? decodedInventories?.find((section) => section.sectionType === "accessory_bag")
-    : undefined;
-  const accessorySuggestions = accessoryBag ? suggestAccessoryUpgrades(accessoryBag.items) : [];
+  const accessorySections = wantsAccessory
+    ? decodedInventories?.filter((section) => section.sectionType === "accessory_bag") ?? []
+    : [];
+  const accessoryLocations = wantsAccessory
+    ? findNbtDataLocations(asRecord(profileContext.rawMember)).filter((section) => section.sectionType === "accessory_bag")
+    : [];
+  const accessoryInventoryComplete = wantsAccessory && accessoryLocations.length > 0 &&
+    accessoryLocations.every((location) => accessorySections.some(
+      (section) => section.path === location.path && !section.error && !section.truncated
+    ));
+  const accessorySuggestions = accessoryInventoryComplete
+    ? suggestAccessoryUpgrades(accessorySections.flatMap((section) => section.items))
+    : [];
 
   const lowbinConfigured = Boolean(process.env.SKYBLOCK_LOWEST_BIN_URL);
 
@@ -311,7 +330,15 @@ export async function getUpgradeAdvisor(client: HypixelClient, options: UpgradeA
     meta: compactObject({
       profileSource: asRecord(profileContext.meta)?.profileSource
     }),
-    privacy: profileContext.privacy
+    privacy: profileContext.privacy,
+    pricing: compactObject({
+      sourceStatus: accessoryPriceBook?.sourceStatus ?? essenceUpgrades?.sourceStatus,
+      sourceFreshness: accessoryPriceBook?.sourceFreshness ?? essenceUpgrades?.sourceFreshness,
+      warnings: [...new Set([...(accessoryPriceBook?.warnings ?? []), ...((asArray(essenceUpgrades?.warnings) ?? []) as string[])])]
+    }),
+    inventoryWarnings: wantsAccessory && !accessoryInventoryComplete
+      ? ["Accessory inventory could not be read completely; accessory upgrade recommendations are withheld."]
+      : undefined
   });
   return { ...envelope, ...advice };
 }

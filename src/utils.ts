@@ -152,6 +152,8 @@ export function parseEnvInteger(name: string, fallback: number): number {
 export type Freshness = {
   fetchedAt: string;
   cached: boolean;
+  sourceUpdatedAt?: string;
+  ageBasis: "upstream" | "retrieval";
   dataAgeSeconds: number | null;
   staleWarning?: string;
   note?: string;
@@ -166,15 +168,25 @@ export type Freshness = {
  * `note` lets callers clarify what the timestamp actually covers (e.g. for item
  * lookups the metadata is cached longer than the live price it carries).
  */
-export function freshnessFromMeta(meta: RequestMeta, staleAfterSeconds: number, note?: string): Freshness {
-  const fetchedMs = Date.parse(meta.fetchedAt);
-  const dataAgeSeconds = Number.isFinite(fetchedMs) ? Math.max(0, Math.round((Date.now() - fetchedMs) / 1000)) : null;
+export function freshnessFromMeta(meta: RequestMeta, staleAfterSeconds: number, note?: string, upstreamUpdatedAt?: number): Freshness {
+  const timestamp = upstreamUpdatedAt ?? Date.parse(meta.fetchedAt);
+  const valid = Number.isFinite(timestamp) && timestamp > 0 && timestamp <= Date.now();
+  const dataAgeSeconds = valid ? Math.round((Date.now() - timestamp) / 1000) : null;
 
   const freshness: Freshness = {
     fetchedAt: meta.fetchedAt,
     cached: meta.cached,
+    ageBasis: upstreamUpdatedAt === undefined ? "retrieval" : "upstream",
     dataAgeSeconds
   };
+
+  if (upstreamUpdatedAt !== undefined) {
+    if (valid) {
+      freshness.sourceUpdatedAt = new Date(timestamp).toISOString();
+    } else {
+      freshness.staleWarning = "The upstream timestamp is invalid or in the future; data freshness cannot be established.";
+    }
+  }
 
   if (dataAgeSeconds !== null && dataAgeSeconds > staleAfterSeconds) {
     freshness.staleWarning = `Data is ~${dataAgeSeconds}s old (> ${staleAfterSeconds}s); re-fetch before quoting exact prices.`;
@@ -193,12 +205,19 @@ export function freshnessFromTimestamp(fetchedAt: string | undefined, cached: bo
   return freshnessFromMeta({ fetchedAt, cached, source: "" }, staleAfterSeconds);
 }
 
-export function createTextResult(value: unknown) {
+export function createTextResult(value: unknown, isError = false) {
+  // Normalize once so structured content exactly matches the JSON text, including
+  // optional fields and NBT's bigint values.
+  const serialize = (_key: string, entry: unknown): unknown => typeof entry === "bigint" ? entry.toString() : entry;
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? null, serialize, 2);
+  const structuredContent = isRecord(value) ? JSON.parse(text) as JsonObject : undefined;
   return {
+    ...(isError ? { isError: true } : {}),
+    ...(structuredContent ? { structuredContent } : {}),
     content: [
       {
         type: "text" as const,
-        text: typeof value === "string" ? value : JSON.stringify(value, null, 2)
+        text
       }
     ]
   };

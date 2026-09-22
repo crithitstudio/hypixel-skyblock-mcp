@@ -203,17 +203,24 @@ export async function getEssenceUpgradeCost(client: HypixelClient, options: Esse
       materialBreakdown: priced.materialBreakdown,
       upgradeCoins: (computed.totalCoins ?? 0) || undefined,
       estimatedTotalCoins: priced.estimatedTotalCoins,
+      pricingComplete: priced.pricingComplete,
+      pricedSubtotalCoins: priced.pricedSubtotalCoins,
       unpriced: priced.unpriced,
+      sourceStatus: priceBook.sourceStatus,
+      sourceFreshness: priceBook.sourceFreshness,
+      warnings: priceBook.warnings,
       disclaimer:
         "Estimate from live Bazaar prices (basis: " +
         basis +
-        "). Excludes any items not on the Bazaar (listed under unpriced); coin costs are exact game values."
+        "). Missing components are listed under unpriced; a full total is omitted when pricing is incomplete. Coin costs are exact game values."
     })
   });
 }
 
 type PricedUpgrade = {
-  estimatedTotalCoins: number;
+  estimatedTotalCoins?: number;
+  pricedSubtotalCoins: number;
+  pricingComplete: boolean;
   essenceCoinValue?: number;
   materialCoinValue?: number;
   materialBreakdown?: Record<string, number>;
@@ -253,7 +260,9 @@ function priceComputedUpgrade(computed: ComputedUpgrade, priceBook: PriceBook): 
   const estimatedTotal = directCoins + (essenceCoinValue ?? 0) + materialCoinValue;
 
   return {
-    estimatedTotalCoins: Math.round(estimatedTotal),
+    estimatedTotalCoins: unpriced.length ? undefined : Math.round(estimatedTotal),
+    pricedSubtotalCoins: Math.round(estimatedTotal),
+    pricingComplete: unpriced.length === 0,
     essenceCoinValue: essenceCoinValue !== undefined ? Math.round(essenceCoinValue) : undefined,
     materialCoinValue: Object.keys(materialBreakdown).length ? Math.round(materialCoinValue) : undefined,
     materialBreakdown: Object.keys(materialBreakdown).length ? materialBreakdown : undefined,
@@ -290,7 +299,7 @@ export async function summarizeEquippedEssenceUpgrades(
   const perPiece: JsonObject[] = [];
   const unpriced = new Set<string>();
   let totalUpgradeCoins = 0;
-  let estimatedTotalCoins = 0;
+  let pricedSubtotalCoins = 0;
 
   for (const piece of pieces) {
     const id = piece.skyblockId;
@@ -320,7 +329,7 @@ export async function summarizeEquippedEssenceUpgrades(
       unpriced.add(id);
     }
     totalUpgradeCoins += computed.totalCoins ?? 0;
-    estimatedTotalCoins += priced.estimatedTotalCoins;
+    pricedSubtotalCoins += priced.pricedSubtotalCoins;
 
     perPiece.push(
       compactObject({
@@ -330,7 +339,10 @@ export async function summarizeEquippedEssenceUpgrades(
         toStar: computed.toStar,
         essenceType: computed.essenceType,
         essence: computed.totalEssence,
-        estimatedCoins: priced.estimatedTotalCoins
+        estimatedCoins: priced.estimatedTotalCoins,
+        pricedSubtotalCoins: priced.pricedSubtotalCoins,
+        pricingComplete: priced.pricingComplete,
+        unpriced: priced.unpriced
       })
     );
   }
@@ -344,7 +356,12 @@ export async function summarizeEquippedEssenceUpgrades(
     essenceByType,
     materials: Object.keys(materials).length ? materials : undefined,
     upgradeCoins: totalUpgradeCoins || undefined,
-    estimatedTotalCoins,
+    estimatedTotalCoins: unpriced.size ? undefined : pricedSubtotalCoins,
+    pricedSubtotalCoins,
+    pricingComplete: unpriced.size === 0,
+    sourceStatus: priceBook.sourceStatus,
+    sourceFreshness: priceBook.sourceFreshness,
+    warnings: priceBook.warnings,
     unpriced: unpriced.size ? [...unpriced] : undefined,
     perPiece,
     disclaimer:

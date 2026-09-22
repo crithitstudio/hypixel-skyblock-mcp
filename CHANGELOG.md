@@ -6,13 +6,51 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Roadmap (planned for 1.1.0)
+## [1.1.0] - 2026-09-22
 
-- **Trophy fish** — summarize trophy-fish tiers and catches in the profile.
-- **Dungeon + pet-score detail** — deeper dungeon class/run reporting and
-  per-pet score / pet-item valuation.
-- **Jacob's contests + bingo** — summarize Jacob's farming contest history and
-  per-member bingo progress (currently surfaced only as raw data).
+### Added
+
+- Player Bingo history/current-event matching, trophy-fish and Jacob contest
+  summaries, richer dungeon runs/classes, and bounded pet detail.
+- `server_status`, `skyblock://guide`, and the `review_profile` MCP prompt.
+- Structured MCP output, tool annotations, protocol integration tests, and a
+  compiled stdio smoke check included in CI and the release checks.
+- Source-specific pricing availability/freshness and explicit inventory, sack,
+  modifier, and missing-data coverage for net worth.
+
+### Fixed
+
+- Explicit profile/member selections can no longer silently choose someone else.
+- Private/missing skill, accessory, slayer, and other data no longer becomes
+  confident zero-valued progression advice. Optional economy failures preserve audits.
+- API failures cannot poison caches; HTML errors retain status and retry hints.
+  Concurrent identical requests coalesce and cache clears invalidate pending writes.
+- Partial essence costs no longer appear as complete, affordable upgrades.
+  Item lookups survive Bazaar outages, wrapped lowest-BIN maps work, and physical
+  item UUIDs prevent double-counting. Standalone enchantment books use variant prices.
+- Full accessory scans prevent recommendations for higher tiers owned later in a bag.
+- HOTM uses mining XP, separate from Core of the Mountain; canonical Wither gear,
+  museum object maps, minion crafted variants, and Crimson reputation are recognized.
+- NBT decoding preserves numeric Minecraft IDs, rejects malformed inventory roots,
+  enforces encoded/expanded size limits, and reports corrupt sections as incomplete.
+- Tool failures now set `isError`, including helpers that return error objects.
+
+### Changed
+
+- Official wiki tools report the July 2026 retirement. Configured MediaWiki sources
+  are labeled non-official, follow redirects, preserve bullets, and use bounded caches.
+- Builds use portable Node filesystem operations. `npm run check` now runs build,
+  coverage, and the compiled server smoke test; packing builds distribution assets.
+- Coverage gates now include HTTP, wiki, pricing, net-worth, upgrade advice, and MCP.
+- Refreshed compatible dependencies to address reported npm advisories.
+- Corrected `progression.minions.craftedSlots` to `craftedVariants` and `craftedTypes`:
+  crafted variants are not available minion slots. Missing slayer claimed levels
+  and incomplete totals are omitted instead of reported as zero.
+
+### Remaining scope
+
+- Full pet/cosmetic valuation, museum/escrow valuation, and stat-gain optimization
+  for reforges, enchants, HOTM, and pets remain outside the supported estimate.
 
 ## [1.0.5] - 2026-06-28
 
@@ -113,7 +151,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - This version was published manually (to bootstrap the package before an OIDC
   trusted publisher could be configured), so it has no provenance attestation.
 
-[Unreleased]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.5...v1.1.0
+[1.0.5]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/crithitstudio/hypixel-skyblock-mcp/compare/v1.0.1...v1.0.2

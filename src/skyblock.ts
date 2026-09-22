@@ -13,6 +13,7 @@ import { summarizeMayor } from "./mayor.js";
 import { decodeInventoriesFromMember, filterNbtDataLocations, findNbtDataLocations } from "./nbt.js";
 import type { InventorySectionQuery } from "./nbt.js";
 import { summarizeEssence, summarizeMuseumMember, summarizeProgression } from "./progression.js";
+import { summarizeFarmingContests, summarizeTrophyFish } from "./profile-summaries.js";
 import { aggregateStorageSections, DEFAULT_STORAGE_SECTION_TYPES, extractSacksCounts } from "./storage.js";
 import type { ApiResult, DecodedInventory, JsonObject, PlayerIdentity } from "./types.js";
 import {
@@ -109,19 +110,29 @@ export async function resolvePlayer(
   client: HypixelClient,
   input: { username?: string; uuid?: string }
 ): Promise<PlayerIdentity> {
-  const supplied = input.uuid ?? input.username;
+  if (input.username !== undefined && input.uuid !== undefined) {
+    throw new McpUserError("Provide either username or uuid, not both.");
+  }
+  const supplied = (input.uuid ?? input.username)?.trim();
 
   if (!supplied) {
     throw new McpUserError("Provide either username or uuid.");
   }
 
   if (input.uuid || looksLikeUuid(supplied)) {
+    if (!/^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(supplied)) {
+      throw new McpUserError("Provide a valid Minecraft UUID (32 hexadecimal digits, optionally dashed).");
+    }
     const uuid = normalizeUuid(supplied);
     return {
       username: input.username && !looksLikeUuid(input.username) ? input.username : undefined,
       uuid,
       uuidDashed: dashedUuid(uuid)
     };
+  }
+
+  if (!/^[A-Za-z0-9_]{1,16}$/.test(supplied)) {
+    throw new McpUserError("Provide a valid Minecraft username (1–16 letters, numbers, or underscores).");
   }
 
   const result = await client.mojangProfile(supplied);
@@ -141,6 +152,75 @@ export async function fetchProfilesForPlayer(
 
 export async function fetchProfileById(client: HypixelClient, profileId: string): Promise<ApiResult<JsonObject>> {
   return client.hypixel<JsonObject>("/v2/skyblock/profile", { profile: profileId }, { requiresApiKey: true, ttlMs: 30_000 });
+}
+
+export async function getSkyblockBingo(
+  client: HypixelClient,
+  input: { username?: string; uuid?: string; eventId?: number; includeCurrentEvent?: boolean; limit?: number }
+): Promise<JsonObject> {
+  const player = await resolvePlayer(client, input);
+  const result = await client.hypixel<JsonObject>("/v2/skyblock/bingo", { uuid: player.uuid }, { requiresApiKey: true, ttlMs: 60_000 });
+  const warnings: string[] = [];
+  const rawEvents = asArray(result.data.events);
+  const parsedEvents = rawEvents?.map(asRecord);
+  const historyAvailable = parsedEvents !== undefined && parsedEvents.every(
+    (event) => event !== undefined && asNumber(event.key) !== undefined
+  );
+  if (!historyAvailable) warnings.push("Bingo history is unavailable or malformed; participation and event counts are unknown.");
+  const records = historyAvailable ? parsedEvents as JsonObject[] : [];
+  const eventRecords = sortByNumeric(records.filter((event) => input.eventId === undefined || asNumber(event.key) === input.eventId), (event) => asNumber(event.key));
+  const limit = clampLimit(input.limit, 20, 100);
+  const completedGoals = (event: JsonObject): string[] | undefined => {
+    const raw = asArray(event.completed_goals);
+    return raw ? [...new Set(raw.flat().filter((goal): goal is string => typeof goal === "string"))] : undefined;
+  };
+  const events = eventRecords.slice(0, limit).map((event) => {
+    const goals = completedGoals(event);
+    return compactObject({ eventId: asNumber(event.key), points: asNumber(event.points), completedGoals: goals, completedGoalCount: goals?.length });
+  });
+  let currentEvent: JsonObject | undefined;
+  let currentEventSource;
+  if (input.includeCurrentEvent !== false) {
+    try {
+      const current = await client.hypixel<JsonObject>("/v2/resources/skyblock/bingo", undefined, { ttlMs: 10 * 60_000 });
+      currentEventSource = current.meta;
+      const currentId = asNumber(current.data.id);
+      const goals = asArray(current.data.goals)?.map(asRecord);
+      const currentEventAvailable = currentId !== undefined && goals !== undefined && goals.every(
+        (goal) => goal !== undefined && asString(goal.id) !== undefined
+      );
+      if (!currentEventAvailable) {
+        warnings.push("Current Bingo event response is unavailable or malformed; current goals and participation are unknown.");
+      } else {
+        const matching = records.find((event) => asNumber(event.key) === currentId);
+        const completed = matching ? completedGoals(matching) : undefined;
+        currentEvent = compactObject({
+          id: currentId,
+          name: current.data.name,
+          start: current.data.start,
+          end: current.data.end,
+          modifier: current.data.modifier,
+          participationReported: historyAvailable ? Boolean(matching) : undefined,
+          goals: (goals as JsonObject[]).slice(0, 100).map((goal) => {
+            const id = asString(goal.id)!;
+            return compactObject({ id, name: goal.name, lore: goal.lore, requiredAmount: goal.requiredAmount, communityProgress: goal.progress, tiers: goal.tiers, completed: completed ? completed.includes(id) : undefined });
+          }),
+          goalsTruncated: goals.length > 100
+        });
+      }
+    } catch (error) {
+      warnings.push(`Current Bingo event unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return compactObject({
+    meta: compactObject({ player, source: result.meta, currentEventSource }),
+    historyAvailable,
+    eventCount: historyAvailable ? eventRecords.length : undefined,
+    shownEvents: historyAvailable ? events.length : undefined,
+    truncated: historyAvailable ? eventRecords.length > events.length : undefined,
+    events: historyAvailable ? events : undefined,
+    ...compactObject({ currentEvent, warnings })
+  });
 }
 
 export async function getSkyblockProfileContext(client: HypixelClient, options: ProfileFetchOptions): Promise<JsonObject> {
@@ -463,6 +543,9 @@ export async function getBazaar(
   if (input.includeRaw) {
     return {
       meta: result.meta,
+      lastUpdated: result.data.lastUpdated,
+      freshness: freshnessFromMeta(result.meta, 60, undefined, asNumber(result.data.lastUpdated)),
+      caveats: BAZAAR_CAVEATS,
       products
     };
   }
@@ -475,7 +558,8 @@ export async function getBazaar(
 
   return {
     meta: result.meta,
-    freshness: freshnessFromMeta(result.meta, 60),
+    lastUpdated: result.data.lastUpdated,
+    freshness: freshnessFromMeta(result.meta, 60, undefined, asNumber(result.data.lastUpdated)),
     caveats: BAZAAR_CAVEATS,
     sortBy,
     products: sorted
@@ -508,6 +592,9 @@ export async function getAuctions(
   }
 
   if (mode === "lookup") {
+    if (input.playerUsername !== undefined && input.playerUuid !== undefined) {
+      throw new McpUserError("Provide either playerUsername or playerUuid, not both.");
+    }
     const player = input.playerUsername
       ? await resolvePlayer(client, { username: input.playerUsername })
       : input.playerUuid
@@ -739,6 +826,8 @@ export function summarizeMember(member: JsonObject, uuid?: string): JsonObject {
     currencies: summarizeCurrencies(currencies),
     essence: summarizeEssence(member),
     jacobContest: member.jacob_contest,
+    farmingContests: summarizeFarmingContests(member.jacob_contest ?? member.jacobs_contest),
+    trophyFish: summarizeTrophyFish(member.trophy_fish),
     accessoryBag: pickPaths(member, {
       tuning: ["accessory_bag_storage", "tuning"],
       selectedPower: ["accessory_bag_storage", "selected_power"],
@@ -800,6 +889,13 @@ function resourcePath(kind: ResourceKind): string {
 function selectProfileFromEnvelope(envelope: JsonObject, selection: ProfileSelection): JsonObject {
   const directProfile = asRecord(envelope.profile);
   if (directProfile) {
+    const directId = asString(directProfile.profile_id) ?? asString(directProfile.profileId);
+    if (selection.profileId && (!directId || normalizeUuid(directId) !== normalizeUuid(selection.profileId))) {
+      throw new McpUserError("The returned profile does not match the requested profileId.");
+    }
+    if (selection.profileName && asString(directProfile.cute_name)?.toLowerCase() !== selection.profileName.toLowerCase()) {
+      throw new McpUserError(`The returned profile does not match profileName '${selection.profileName}'.`);
+    }
     return directProfile;
   }
 
@@ -814,6 +910,7 @@ function selectProfileFromEnvelope(envelope: JsonObject, selection: ProfileSelec
     if (found) {
       return found;
     }
+    throw new McpUserError(`No SkyBlock profile matches profileId '${selection.profileId}'.`);
   }
 
   if (selection.profileName) {
@@ -822,6 +919,7 @@ function selectProfileFromEnvelope(envelope: JsonObject, selection: ProfileSelec
     if (found) {
       return found;
     }
+    throw new McpUserError(`No SkyBlock profile matches profileName '${selection.profileName}'.`);
   }
 
   if (selection.selectedOnly !== false) {
@@ -893,6 +991,9 @@ async function resolveMemberIdentity(
   options: ProfileFetchOptions,
   player: PlayerIdentity | undefined
 ): Promise<PlayerIdentity | undefined> {
+  if (options.memberUsername !== undefined && options.memberUuid !== undefined) {
+    throw new McpUserError("Provide either memberUsername or memberUuid, not both.");
+  }
   if (options.memberUuid) {
     return resolvePlayer(client, { uuid: options.memberUuid });
   }
@@ -906,12 +1007,15 @@ async function resolveMemberIdentity(
 
 function chooseMemberUuid(profile: JsonObject, preferredUuid: string | undefined): string | undefined {
   const members = asRecord(profile.members);
+  if (preferredUuid) {
+    const match = Object.keys(members ?? {}).find((uuid) => normalizeUuid(uuid) === normalizeUuid(preferredUuid));
+    if (!match || !asRecord(members?.[match])) {
+      throw new McpUserError("The requested member is not present in the selected SkyBlock profile.");
+    }
+    return match;
+  }
   if (!members) {
     return undefined;
-  }
-
-  if (preferredUuid && members[normalizeUuid(preferredUuid)]) {
-    return normalizeUuid(preferredUuid);
   }
 
   const sorted = sortByNumeric(Object.entries(members), ([, member]) => {
@@ -1080,7 +1184,15 @@ function summarizeDungeons(dungeons: JsonObject | undefined): JsonObject | undef
             experience: asNumber(record.experience),
             highestTierCompleted: asNumber(record.highest_tier_completed),
             tierCompletions: record.tier_completions,
+            totalCompletions: asRecord(record.tier_completions)
+              ? Object.values(record.tier_completions as JsonObject).reduce<number>((sum, count) => sum + (asNumber(count) ?? 0), 0)
+              : undefined,
             fastestTime: record.fastest_time,
+            fastestTimeS: record.fastest_time_s,
+            fastestTimeSPlus: record.fastest_time_s_plus,
+            bestScore: record.best_score,
+            mobsKilled: record.mobs_killed,
+            mostDamage: Object.fromEntries(Object.entries(record).filter(([key]) => key.startsWith("most_damage_"))),
             bestRuns: summarizeDungeonBestRuns(asRecord(record.best_runs))
           })
         ];
@@ -1109,43 +1221,29 @@ function summarizePets(pets: unknown[] | undefined): JsonObject | undefined {
     "desc"
   );
 
+  const summarizePet = (pet: JsonObject): JsonObject => {
+    const exp = asNumber(pet.exp);
+    const level = exp !== undefined ? petLevelFromExp(exp, asString(pet.tier) ?? "COMMON", asString(pet.type)) : undefined;
+    return compactObject({
+      uuid: pet.uuid,
+      type: pet.type,
+      tier: pet.tier,
+      exp,
+      active: pet.active,
+      heldItem: pet.heldItem,
+      candyUsed: pet.candyUsed,
+      skin: pet.skin,
+      level: level?.level,
+      levelProgress: level
+    });
+  };
   return {
     count: pets.length,
-    active: (() => {
-      const pet = sorted.find((entry) => entry.active === true);
-      if (!pet) {
-        return undefined;
-      }
-
-      const exp = asNumber(pet.exp);
-      const tier = asString(pet.tier) ?? "COMMON";
-
-      return compactObject({
-        type: pet.type,
-        tier: pet.tier,
-        exp: pet.exp,
-        active: pet.active,
-        heldItem: pet.heldItem,
-        candyUsed: pet.candyUsed,
-        skin: pet.skin,
-        level: exp !== undefined ? petLevelFromExp(exp, tier, asString(pet.type)).level : undefined
-      });
-    })(),
-    topByExp: sorted.slice(0, 10).map((pet) => {
-      const exp = asNumber(pet.exp);
-      const tier = asString(pet.tier) ?? "COMMON";
-
-      return compactObject({
-        type: pet.type,
-        tier: pet.tier,
-        exp: pet.exp,
-        active: pet.active,
-        heldItem: pet.heldItem,
-        candyUsed: pet.candyUsed,
-        skin: pet.skin,
-        level: exp !== undefined ? petLevelFromExp(exp, tier, asString(pet.type)).level : undefined
-      });
-    })
+    active: sorted.find((entry) => entry.active === true) ? summarizePet(sorted.find((entry) => entry.active === true)!) : undefined,
+    topByExp: sorted.slice(0, 10).map(summarizePet),
+    all: sorted.slice(0, 100).map(summarizePet),
+    shownPets: Math.min(sorted.length, 100),
+    truncated: sorted.length > 100
   };
 }
 
@@ -1252,6 +1350,7 @@ function summarizeBazaarProduct(productId: string, product: unknown, includeOrde
     marginPercent,
     sellVolume: asNumber(quick.sellVolume),
     buyVolume: asNumber(quick.buyVolume),
+    volume: numberOrZero(quick.sellVolume) + numberOrZero(quick.buyVolume),
     movingWeek: numberOrZero(quick.sellMovingWeek) + numberOrZero(quick.buyMovingWeek),
     sellOrders: asNumber(quick.sellOrders),
     buyOrders: asNumber(quick.buyOrders),
@@ -1297,13 +1396,15 @@ function formatAuctionResult(
   if (input.includeRaw) {
     return {
       meta: result.meta,
+      freshness: freshnessFromMeta(result.meta, 60, undefined, asNumber(result.data.lastUpdated)),
+      caveats: AUCTION_CAVEATS,
       raw: result.data
     };
   }
 
   return {
     meta: result.meta,
-    freshness: freshnessFromMeta(result.meta, 60),
+    freshness: freshnessFromMeta(result.meta, 60, undefined, asNumber(result.data.lastUpdated)),
     caveats: AUCTION_CAVEATS,
     page: result.data.page,
     totalPages: result.data.totalPages,
