@@ -1,5 +1,7 @@
 # Hypixel SkyBlock MCP
 
+> **Policy notice (October 26, 2026):** In response to support ticket **#1214029**, Hypixel Support stated that AI tools are **not currently permitted to access the Hypixel API directly**, as Hypixel considers this automated API usage. Support also stated that users may not be asked to configure their own Hypixel API keys for tools distributed by someone else, and that the API usage proposed for this MCP project cannot be approved through an application. **Do not use this repository's AI-to-Hypixel API integration or the API-key configuration instructions below as an approved integration.** This repository and its historical setup documentation are retained for review; the project must be redesigned or receive materially different written authorization before this use can resume. See [Hypixel's API policy](https://developer.hypixel.net/policies/).
+
 An AI-facing Model Context Protocol server for Hypixel SkyBlock data. Its 23 tools cover profiles, progression, inventory/storage, Bazaar and auctions, upgrade costs, net worth, Bingo, and configured wiki sources. Results distinguish API observations, estimates, missing data, and incomplete pricing so an assistant can give grounded advice.
 
 ## Requirements
